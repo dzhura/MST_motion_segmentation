@@ -3,6 +3,7 @@
 #include <list>
 #include <utility> // pair
 #include <vector>
+#include <stdio.h> // C-style file reading
 #include <stdlib.h> // rand_r
 #include <cassert>
 
@@ -10,8 +11,13 @@
 #include <opencv2/gpu/gpu.hpp>
 #include <opencv2/highgui/highgui.hpp>
 
+#include <opencv2/imgproc/imgproc.hpp> // split
+
 #include <boost/property_map/vector_property_map.hpp>
 #include <boost/pending/disjoint_sets.hpp>
+
+const bool verbose=1;
+const bool show_optical_flow=0;
 
 struct edge_t
 {
@@ -35,102 +41,126 @@ cv::Vec3b colour_8UC3(int index);
 int main(int argc, char * argv[])
 {
 	//const float PI = 3.1415926;
-	const float alpha = 0.197;
-	const float gamma = 50.0;
-	const float scale_factor = 0.6;
-	const int inner_iteratoins = 10;
-	const int outter_iterations = 77;
-	const int solver_iterations = 10;
  
 	// TODO Load optical flow file (.flo) instead of computing one
-	if( argc != 5 + 1) {
+	if( argc != 4 + 1) {
 		std::cout << argv[0] <<" usage:" << std::endl;
-		std::cout << "1 - frame 1" << std::endl;
-		std::cout << "2 - frame 2" << std::endl;
-		std::cout << "3 - output filename" << std::endl;
-		std::cout << "4 - thi additional threshold; larger thi results in larger segments" << std::endl;
-		std::cout << "5 - eps min allowable norm of a flow vector; only vectors with at least eps norm are considered" << std::endl;
-		std::cout << "Optical flow parameters are hardcoded" << std::endl;
+		std::cout << "1 - .flo file" << std::endl;
+		std::cout << "2 - output filename" << std::endl;
+		std::cout << "3 - thi additional threshold; larger thi results in larger segments" << std::endl;
+		std::cout << "4 - eps min allowable norm of a flow vector; only vectors with at least eps norm are considered" << std::endl;
 		return 1;
 	}
 
-	//// Read and check input
-	cv::Mat frame[2];
-	frame[0] = cv::imread(argv[1]);
-	frame[1] = cv::imread(argv[2]);
-	if(frame[0].size() != frame[1].size()) {
-		std::cout << "The input frames have not equal sizes!" << std::endl;
+	//// Read and check optical flow
+	std::string input_flo_filename(argv[1]);
+
+	if(input_flo_filename.empty()) {
+		std::cout << "Input flo file is empty!" << std::endl;
 		return 0;
 	}
-	if(frame[0].type() != frame[1].type()) {
-		std::cout << "The input frames are of different types!" << std::endl;
+
+	FILE * stream = fopen(input_flo_filename.c_str(), "rb");
+	if(stream == 0) {
+		std::cout << "Could not open " << input_flo_filename << std::endl;
 		return 0;
 	}
-	// Convert the input to CV_32FC1, as required for BroxOpticalFlow
-	for(int i=0; i<2; ++i) {
-		cv::cvtColor(frame[i], frame[i], cv::COLOR_BGR2GRAY);
-		frame[i].convertTo(frame[i], CV_32F, 1.0 /255.0);
+
+	int width, height;
+	float tag;
+	if ((int)fread(&tag,    sizeof(float), 1, stream) != 1 ||
+	       	(int)fread(&width,  sizeof(int),   1, stream) != 1 ||
+	       	(int)fread(&height, sizeof(int),   1, stream) != 1) {
+		std::cout << "Problem reading file " << input_flo_filename << std::endl;
+		return 0;
 	}
 
-	std::string output_filename(argv[3]);
+	if (tag != 202021.25) { // simple test for correct endian-ness
+		std::cout << "Wrong tag (possibly due to big-endian machine?)" << std::endl;
+		return 0;
+	}
 
-	double thi = atof(argv[4]);
+	// another sanity check to see that integers were read correctly (99999 should do the trick...)
+	if (width < 1 || width > 99999) {
+		std::cout << "Illegal width " << input_flo_filename << std::endl;
+		return 0;
+	}
+
+	if (height < 1 || height > 99999) {
+		std::cout << "Illegal height " << input_flo_filename << std::endl;
+		return 0;
+	}
+
+	cv::Size flow_size(width, height);
+
+	size_t flo_data_size = 2 * flow_size.area() * sizeof(float);
+	unsigned char * flo_data = new unsigned char[flo_data_size];
+
+	size_t ret_code = fread(flo_data, sizeof(float), 2*flow_size.area(), stream);
+
+	if(ret_code != 2*(size_t)flow_size.area()) {
+		if(feof(stream)) {
+			std::cout << "Error reading " << input_flo_filename << ": unexpected end of the file" << std::endl;
+			return 0;
+		}
+		else if(ferror(stream)) {
+			std::cout << "Error reading " << input_flo_filename << std::endl;
+			return 0;
+		}
+	}
+
+	if (fgetc(stream) != EOF) {
+		std::cout << "File is too long" << input_flo_filename << std::endl;
+		return 0;
+	}
+
+	fclose(stream);
+
+	cv::Mat flow(flow_size, CV_32FC2, flo_data);
+
+
+
+	//// Read and check the rest of parameters
+	double thi = atof(argv[3]);
 	if( thi < 0 ) {
 		std::cout << "The thi should be non-negative" << std::endl;
 		return 0;
 	}
 
-	double eps = atof(argv[5]);
+	double eps = atof(argv[4]);
 	if( eps < 0 || 1 < eps ) {
 		std::cout << "The eps should be in [0;1] range" << std::endl;
 		return 0;
 	}
 
-	//// Compute an optical flow
-	cv::gpu::GpuMat gpuFrame[2], gpuFlow[2];
-	for(int i=0; i<2; ++i) {
-		gpuFrame[i].upload(frame[i]);
-	}
-
-	// The output is of the same type as the input
-	cv::gpu::BroxOpticalFlow bof(alpha, gamma, scale_factor, inner_iteratoins, outter_iterations, solver_iterations);
-	bof(gpuFrame[0], gpuFrame[1], gpuFlow[0], gpuFlow[1]);
-
-	cv::Mat flow[2];
-	for(int i=0; i<2; ++i) {
-		gpuFlow[i].download(flow[i]);
-	}
+	std::string output_filename(argv[2]);
 
 	//// Create a graph of flow vectors with edges connecting neightbour vertices,
 	//// scaled by a degree of angle between them  
-	cv::Size flow_size = flow[0].size();
-
-	std::size_t vertices_count = flow_size.width * flow_size.height;
-
 	std::list< int > vertices;
 	for(int j=0; j<flow_size.height; ++j) {
-		const float * x_flow = flow[0].ptr<float>(j);
-		const float * y_flow = flow[1].ptr<float>(j);
+		const float * p_flow = flow.ptr<float>(j);
 
-		for(int i=0; i<flow_size.width; ++i, ++x_flow, ++y_flow) {
+		// NB: p_flow = x-flow component, p_flow+1 = y-flow component
+		for(int i=0; i<flow_size.width; ++i, p_flow+=2) {
 			//std::cout << i << ' ' << j << std::endl;
 			//std::cout << "|" << std::endl;
-			if(norm(*x_flow, *y_flow) > eps) {
+			if(norm(*p_flow, *(p_flow+1)) > eps) {
 				vertices.push_back(i + j*flow_size.width);
 			}
 		}
 	}
 
 	std::list< edge_t > edges;
+	
 	// Add edges along x axis
 	for(int j=0; j<flow_size.height; ++j) {
-		const float * x_flow = flow[0].ptr<float>(j);
-		const float * y_flow = flow[1].ptr<float>(j);
+		const float * p_flow = flow.ptr<float>(j);
 
-		for(int i=0; i<flow_size.width-1; ++i, ++x_flow, ++y_flow) {
-			double s = scalar(*x_flow, *y_flow, *(x_flow+1), *(y_flow+1));
-			double norm_a = norm(*x_flow, *y_flow);
-			double norm_b = norm(*(x_flow+1), *(y_flow+1));
+		for(int i=0; i<flow_size.width-1; ++i, p_flow+=2) {
+			double s = scalar(*p_flow, *(p_flow+1), *(p_flow+2), *(p_flow+3));
+			double norm_a = norm(*p_flow, *(p_flow+1));
+			double norm_b = norm(*(p_flow+2), *(p_flow+3));
 
 			if(norm_a > eps && norm_b > eps) {
 				edges.emplace_back(i + j*flow_size.width, i+1 + j*flow_size.width, acos(s / (norm_a * norm_b)));
@@ -140,15 +170,13 @@ int main(int argc, char * argv[])
 
 	// Add edges along x axis
 	for(int j=0; j<flow_size.height-1; ++j) {
-		const float * x_flow = flow[0].ptr<float>(j);
-		const float * y_flow = flow[1].ptr<float>(j);
-		const float * x_flow_bot = flow[0].ptr<float>(j+1);
-		const float * y_flow_bot = flow[1].ptr<float>(j+1);
+		const float * p_flow = flow.ptr<float>(j);
+		const float * p_flow_bot = flow.ptr<float>(j+1);
 
-		for(int i=0; i<flow_size.width; ++i, ++x_flow, ++y_flow, ++x_flow_bot, ++y_flow_bot) {
-			double s = scalar(*x_flow, *y_flow, *x_flow_bot, *y_flow_bot);
-			double norm_a = norm(*x_flow, *y_flow);
-			double norm_b = norm(*x_flow_bot, *y_flow_bot);
+		for(int i=0; i<flow_size.width; ++i, p_flow+=2, p_flow_bot+=2) {
+			double s = scalar(*p_flow, *(p_flow+1), *p_flow_bot, *(p_flow_bot+1));
+			double norm_a = norm(*p_flow, *(p_flow+1));
+			double norm_b = norm(*p_flow_bot, *(p_flow_bot+1));
 
 			if(norm_a > eps && norm_b > eps) {
 				edges.emplace_back(i + j*flow_size.width, i + (j+1)*flow_size.width, acos(s / (norm_a * norm_b)));
@@ -162,6 +190,7 @@ int main(int argc, char * argv[])
 	typedef boost::vector_property_map<std::size_t> rank_t;
 	typedef boost::vector_property_map< int> parent_t;
 
+	std::size_t vertices_count = flow_size.area();
 	rank_t rank_map(vertices_count);
 	parent_t parent_map(vertices_count);
 
@@ -192,7 +221,9 @@ int main(int argc, char * argv[])
 			mst_size[parent] = mst_size[parent_u] + mst_size[parent_v];
 		}	
 	}
-	std::cout << "Amount of segments: " << dsets.count_sets(vertices.begin(), vertices.end()) << std::endl;
+	if(verbose) {
+		std::cout << "Amount of segments: " << dsets.count_sets(vertices.begin(), vertices.end()) << std::endl;
+	}
 
 	//// Return output
 	// For the component colouring
@@ -210,7 +241,20 @@ int main(int argc, char * argv[])
 	}
 
 	cv::imwrite(output_filename, output);
+
+	if(show_optical_flow) {
+		// Flow for printing
+		cv::Mat flow_output[2];
+
+		cv::split(flow, flow_output);
+
+		cv::imshow("optical flow u", flow_output[0]);	
+		cv::imshow("optical flow v", flow_output[1]);	
+		cv::waitKey(0);
+	}
 	
+	delete[] flo_data;
+ 
 	return 0;
 }
 

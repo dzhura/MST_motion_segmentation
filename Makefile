@@ -1,4 +1,5 @@
 CC=g++ -std=c++11
+#CFLAGS= -c -Wall -Wextra -ggdb
 CFLAGS= -c -Wall -Wextra -O2
 LDFLAGS=
 
