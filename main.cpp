@@ -10,24 +10,31 @@
 #include <opencv2/gpu/gpu.hpp>
 #include <opencv2/highgui/highgui.hpp>
 
-#include <boost/graph/adjacency_list.hpp>
-#include <boost/graph/connected_components.hpp>
+#include <boost/property_map/vector_property_map.hpp>
+#include <boost/pending/disjoint_sets.hpp>
 
-//float scalar(float rx, float ry, float lx, float ly);
-float scalar(const unsigned char rx, const unsigned char ry, const unsigned char lx, const unsigned char ly);
-//float norm(float x, float y);
-float norm(const unsigned char x, const unsigned char y);
+struct edge_t
+{
+	 int _u, _v;
+	double _weight;
 
-int linear_index(int i, int j, int width);
-cv::Point matrix_index(int k, int width);
+	edge_t( int u,  int v, double weight):
+		_u(u), _v(v), _weight(weight) { }
+
+	bool operator < (const edge_t & edge) {
+		return this->_weight < edge._weight;
+	}
+};
+
+double scalar(const double rx, const double ry, const double lx, const double ly);
+double norm(const double x, const double y);
 
 void randomPermuteRange(int n, std::vector<int>& vec, unsigned int *seed);
 cv::Vec3b colour_8UC3(int index);
 
-// TODO Let flow range be [0 2^16]
 int main(int argc, char * argv[])
 {
-	const float PI = 3.1415926;
+	//const float PI = 3.1415926;
 	const float alpha = 0.197;
 	const float gamma = 50.0;
 	const float scale_factor = 0.6;
@@ -35,13 +42,14 @@ int main(int argc, char * argv[])
 	const int outter_iterations = 77;
 	const int solver_iterations = 10;
  
+	// TODO Load optical flow file (.flo) instead of computing one
 	if( argc != 5 + 1) {
 		std::cout << argv[0] <<" usage:" << std::endl;
 		std::cout << "1 - frame 1" << std::endl;
 		std::cout << "2 - frame 2" << std::endl;
 		std::cout << "3 - output filename" << std::endl;
-		std::cout << "4 - eps max magnitude of a flow vector to be ignored [0 - min magnitude, 255 - max magnitude]" << std::endl;
-		std::cout << "5 - thi max angle in degrees of two flow vectors to be considered as co-directed" << std::endl;
+		std::cout << "4 - thi additional threshold; larger thi results in larger segments" << std::endl;
+		std::cout << "5 - eps min allowable norm of a flow vector; only vectors with at least eps norm are considered" << std::endl;
 		std::cout << "Optical flow parameters are hardcoded" << std::endl;
 		return 1;
 	}
@@ -50,29 +58,32 @@ int main(int argc, char * argv[])
 	cv::Mat frame[2];
 	frame[0] = cv::imread(argv[1]);
 	frame[1] = cv::imread(argv[2]);
-
 	if(frame[0].size() != frame[1].size()) {
 		std::cout << "The input frames have not equal sizes!" << std::endl;
 		return 0;
 	}
-
 	if(frame[0].type() != frame[1].type()) {
 		std::cout << "The input frames are of different types!" << std::endl;
 		return 0;
 	}
-
-	float eps = atof(argv[4]);
-	float thi_rad = (PI*atoi(argv[5]))/180.0;
-
-	if( thi_rad < 0 || thi_rad > PI/2 ) {
-		std::cout << "The thi should be between 0 and 90 degrees" << std::endl;
-		return 0;
-	}
-
 	// Convert the input to CV_32FC1, as required for BroxOpticalFlow
 	for(int i=0; i<2; ++i) {
 		cv::cvtColor(frame[i], frame[i], cv::COLOR_BGR2GRAY);
 		frame[i].convertTo(frame[i], CV_32F, 1.0 /255.0);
+	}
+
+	std::string output_filename(argv[3]);
+
+	double thi = atof(argv[4]);
+	if( thi < 0 ) {
+		std::cout << "The thi should be non-negative" << std::endl;
+		return 0;
+	}
+
+	double eps = atof(argv[5]);
+	if( eps < 0 || 1 < eps ) {
+		std::cout << "The eps should be in [0;1] range" << std::endl;
+		return 0;
 	}
 
 	//// Compute an optical flow
@@ -88,68 +99,100 @@ int main(int argc, char * argv[])
 	cv::Mat flow[2];
 	for(int i=0; i<2; ++i) {
 		gpuFlow[i].download(flow[i]);
-		flow[i].convertTo(flow[i], CV_8U, 255.0);
 	}
 
-	//// Create a graph of flows vectors with edges corresponding to the given affinity
-	std::list<std::pair<int, int> > edges;
-	cv::Size size = flow[0].size();
-	std::vector<bool> non_null_flow_map(size.height*size.width, false);
+	//// Create a graph of flow vectors with edges connecting neightbour vertices,
+	//// scaled by a degree of angle between them  
+	cv::Size flow_size = flow[0].size();
 
-	//std::cout << norm(*flow[0].ptr<double>(size.height), *flow[1].ptr<double>(size.height)) << std::endl;
+	std::size_t vertices_count = flow_size.width * flow_size.height;
 
-	int counter = 0;
-	// Left and bottom optical flow borders are ignored in sake of simplicity
-	for(int j=0; j<size.height-1; ++j) {
-		const unsigned char * it0 = flow[0].ptr<const unsigned char>(j), * it1 = flow[1].ptr<const unsigned char>(j);
-		const unsigned char * bot_it0 = flow[0].ptr<const unsigned char>(j+1), * bot_it1 = flow[1].ptr<const unsigned char>(j+1);
+	std::list< int > vertices;
+	for(int j=0; j<flow_size.height; ++j) {
+		const float * x_flow = flow[0].ptr<float>(j);
+		const float * y_flow = flow[1].ptr<float>(j);
 
-		for(int i=0; i<size.width-1; ++i, ++it0, ++it1, ++bot_it0, ++bot_it1) {
-			if(norm(*it0, *it1) < eps) {
-				// Skip null-flow vectors
-				continue;
-			}
-			counter++;
-
-			non_null_flow_map[linear_index(i, j, size.width)] = true;
-	
-			float scalar_product = scalar(*it0, *it1, *(it0+1), *(it1+1));
-			// If vector flows is co-directed
-			if( scalar_product > 0 && (scalar_product / (norm(*it0, *it1) * norm(*(it0+1),*(it1+1)))) >= cos(thi_rad) ) {
-				edges.emplace_back(std::make_pair(linear_index(i, j, size.width), linear_index(i+1, j, size.width)));
-			}
-
-			scalar_product = scalar(*it0, *it1, *bot_it0, *bot_it1);
-			// If vector flows is co-directed
-			if( scalar_product > 0 && (scalar_product / (norm(*it0, *it1) * norm(*bot_it0,*bot_it1))) >= cos(thi_rad) ) {
-				edges.emplace_back(std::make_pair(linear_index(i, j, size.width), linear_index(i, j+1, size.width)));
+		for(int i=0; i<flow_size.width; ++i, ++x_flow, ++y_flow) {
+			//std::cout << i << ' ' << j << std::endl;
+			//std::cout << "|" << std::endl;
+			if(norm(*x_flow, *y_flow) > eps) {
+				vertices.push_back(i + j*flow_size.width);
 			}
 		}
 	}
-	std::cout << "Amount of not filterd flow vectors: " << counter << std::endl;
-	std::cout << "Amount of connections: " << edges.size() << std::endl;
 
-	//// Extract connected components
-	boost::adjacency_list<boost::vecS, boost::vecS, boost::undirectedS> graph(edges.begin(), edges.end(), size.width*size.height);
+	std::list< edge_t > edges;
+	// Add edges along x axis
+	for(int j=0; j<flow_size.height; ++j) {
+		const float * x_flow = flow[0].ptr<float>(j);
+		const float * y_flow = flow[1].ptr<float>(j);
 
-	std::vector<int> component_map(boost::num_vertices(graph));
-	int connected_components_count = boost::connected_components(graph, &component_map[0]);
-	std::cout << "Connected components: " << connected_components_count << std::endl;
+		for(int i=0; i<flow_size.width-1; ++i, ++x_flow, ++y_flow) {
+			double s = scalar(*x_flow, *y_flow, *(x_flow+1), *(y_flow+1));
+			double norm_a = norm(*x_flow, *y_flow);
+			double norm_b = norm(*(x_flow+1), *(y_flow+1));
 
-	//// Return optical flow
-	cv::Mat output_flow(size, CV_16UC1, cv::Scalar_<unsigned short>(0));
-
-	for(int j=0; j<size.height; ++j) {
-		const unsigned char * src0 = flow[0].ptr<const unsigned char>(j),
-	       			* src1 = flow[1].ptr<const unsigned char>(j);
-		unsigned short * dst = output_flow.ptr<unsigned short>(j);
-
-		for(int i=0; i<size.width; ++i) {
-			dst[i] = norm(src0[i], src1[i]);
+			if(norm_a > eps && norm_b > eps) {
+				edges.emplace_back(i + j*flow_size.width, i+1 + j*flow_size.width, acos(s / (norm_a * norm_b)));
+			}
 		}
 	}
 
-	cv::imwrite(std::string("output_flow.jpg"), output_flow);
+	// Add edges along x axis
+	for(int j=0; j<flow_size.height-1; ++j) {
+		const float * x_flow = flow[0].ptr<float>(j);
+		const float * y_flow = flow[1].ptr<float>(j);
+		const float * x_flow_bot = flow[0].ptr<float>(j+1);
+		const float * y_flow_bot = flow[1].ptr<float>(j+1);
+
+		for(int i=0; i<flow_size.width; ++i, ++x_flow, ++y_flow, ++x_flow_bot, ++y_flow_bot) {
+			double s = scalar(*x_flow, *y_flow, *x_flow_bot, *y_flow_bot);
+			double norm_a = norm(*x_flow, *y_flow);
+			double norm_b = norm(*x_flow_bot, *y_flow_bot);
+
+			if(norm_a > eps && norm_b > eps) {
+				edges.emplace_back(i + j*flow_size.width, i + (j+1)*flow_size.width, acos(s / (norm_a * norm_b)));
+			}
+		}
+	}
+	//std::cout << edges.size() << std::endl;
+
+
+	//// Create initial disjoint sets, each containg a singeltone vertex
+	typedef boost::vector_property_map<std::size_t> rank_t;
+	typedef boost::vector_property_map< int> parent_t;
+
+	rank_t rank_map(vertices_count);
+	parent_t parent_map(vertices_count);
+
+	boost::disjoint_sets<rank_t, parent_t > dsets(rank_map, parent_map);
+	for(auto vertex=vertices.begin(); vertex != vertices.end(); ++vertex) {
+		dsets.make_set(*vertex);
+	}
+
+	//// Create MST max weight and size property maps, the first initilized by zeros and the second by ones (i.e. initilal mst contain signle vertex)
+	std::vector<double> mst_max_weight(vertices_count, 0);
+	std::vector<double> mst_size(vertices_count, 1);
+
+	//// Segment the graph into disjoint sets, such that flow vectors form the same set have similar orientation
+	edges.sort(); // Sort in ascending order
+
+	for(auto edge = edges.begin(); edge != edges.end(); ++edge) {
+		 int parent_u = dsets.find_set(edge->_u);
+		 int parent_v = dsets.find_set(edge->_v);
+		
+		if( parent_u != parent_v &&
+			edge->_weight < std::min(
+						mst_max_weight[parent_u] + thi / mst_size[parent_u],
+						mst_max_weight[parent_v] + thi / mst_size[parent_v])) {
+			dsets.link(parent_u, parent_v); // Equivalent to union(u, v)
+
+		 	int parent = dsets.find_set(parent_u);
+			mst_max_weight[parent] = std::max(mst_max_weight[parent_u], mst_max_weight[parent_v]);
+			mst_size[parent] = mst_size[parent_u] + mst_size[parent_v];
+		}	
+	}
+	std::cout << "Amount of segments: " << dsets.count_sets(vertices.begin(), vertices.end()) << std::endl;
 
 	//// Return output
 	// For the component colouring
@@ -157,55 +200,28 @@ int main(int argc, char * argv[])
 	unsigned int seed = rand() % 1000000;
 	randomPermuteRange(pow(256,3), random_numbers, &seed); 
 
-	cv::Mat output(size, CV_8UC3, cv::Scalar_<unsigned char>(0));
+	cv::Mat output(flow_size, CV_8UC3, cv::Scalar_<unsigned char>(0));
 
-	size_t k=0;
-	for(cv::MatIterator_<cv::Vec3b> dst = output.begin<cv::Vec3b>();
-       		dst!=output.end<cv::Vec3b>();
-	       	++dst) {
-		if(!non_null_flow_map[k]) {
-			++k;
-			continue;
-		}
+	for(auto vertex = vertices.begin(); vertex != vertices.end(); ++vertex) {
+		int i = *vertex / flow_size.width;
+		int j = *vertex % flow_size.width;
 
-		*dst = colour_8UC3( random_numbers[component_map[k++]] );
+		output.at<cv::Vec3b>(i,j) = colour_8UC3( random_numbers[dsets.find_set(*vertex)] );
 	}
-	std::cout << k << std::endl;
 
-	cv::imwrite(argv[3], output);
+	cv::imwrite(output_filename, output);
 	
 	return 0;
 }
 
-float scalar(float rx, float ry, float lx, float ly)
+double scalar(const double rx, const double ry, const double lx, const double ly)
 {
 	return rx*lx + ry*ly;
 }
 
-float scalar(const unsigned char rx, const unsigned char ry, const unsigned char lx, const unsigned char ly)
-{
-	return rx*lx + ry*ly;
-}
-
-float norm(const unsigned char x, const unsigned char y)
-{
-	return sqrt(pow((const unsigned short)x,2) + pow((const unsigned short)y,2));
-}
-
-float norm(float x, float y)
+double norm(const double x, const double y)
 {
 	return sqrt(pow(x,2) + pow(y,2));
-}
-
-int linear_index(int i, int j, int width)
-{
-	return i + j*width;
-}
-
-cv::Point matrix_index(int k, int width)
-{
-	//return cv::Point( (int)k/width, k%width );
-	return cv::Point( k%width, (int)k/width );
 }
 
 void randomPermuteRange(int n, std::vector<int>& vec, unsigned int *seed)
