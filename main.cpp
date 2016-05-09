@@ -128,8 +128,8 @@ int main(int argc, char * argv[])
 	}
 
 	double eps = atof(argv[4]);
-	if( eps < 0 || 1 < eps ) {
-		std::cout << "The eps should be in [0;1] range" << std::endl;
+	if( eps <= 0 ) {
+		std::cout << "The eps should be positive" << std::endl;
 		return 0;
 	}
 
@@ -168,7 +168,7 @@ int main(int argc, char * argv[])
 		}
 	}
 
-	// Add edges along x axis
+	// Add edges along y axis
 	for(int j=0; j<flow_size.height-1; ++j) {
 		const float * p_flow = flow.ptr<float>(j);
 		const float * p_flow_bot = flow.ptr<float>(j+1);
