@@ -38,6 +38,8 @@ double norm(const double x, const double y);
 void randomPermuteRange(int n, std::vector<int>& vec, unsigned int *seed);
 cv::Vec3b colour_8UC3(int index);
 
+bool read_opticalFlow(const std::string & opticalflow_filename, cv::Mat & out);
+
 int main(int argc, char * argv[])
 {
 	//const float PI = 3.1415926;
@@ -53,72 +55,11 @@ int main(int argc, char * argv[])
 	}
 
 	//// Read and check optical flow
-	std::string input_flo_filename(argv[1]);
-
-	if(input_flo_filename.empty()) {
-		std::cout << "Input flo file is empty!" << std::endl;
-		return 0;
+	cv::Mat flow;
+	if( !read_opticalFlow(std::string(argv[1]), flow)) {
+		std::cout << "Could not read opticalflow: " << argv[1] << std::endl;
+		return 1;
 	}
-
-	FILE * stream = fopen(input_flo_filename.c_str(), "rb");
-	if(stream == 0) {
-		std::cout << "Could not open " << input_flo_filename << std::endl;
-		return 0;
-	}
-
-	int width, height;
-	float tag;
-	if ((int)fread(&tag,    sizeof(float), 1, stream) != 1 ||
-	       	(int)fread(&width,  sizeof(int),   1, stream) != 1 ||
-	       	(int)fread(&height, sizeof(int),   1, stream) != 1) {
-		std::cout << "Problem reading file " << input_flo_filename << std::endl;
-		return 0;
-	}
-
-	if (tag != 202021.25) { // simple test for correct endian-ness
-		std::cout << "Wrong tag (possibly due to big-endian machine?)" << std::endl;
-		return 0;
-	}
-
-	// another sanity check to see that integers were read correctly (99999 should do the trick...)
-	if (width < 1 || width > 99999) {
-		std::cout << "Illegal width " << input_flo_filename << std::endl;
-		return 0;
-	}
-
-	if (height < 1 || height > 99999) {
-		std::cout << "Illegal height " << input_flo_filename << std::endl;
-		return 0;
-	}
-
-	cv::Size flow_size(width, height);
-
-	size_t flo_data_size = 2 * flow_size.area() * sizeof(float);
-	unsigned char * flo_data = new unsigned char[flo_data_size];
-
-	size_t ret_code = fread(flo_data, sizeof(float), 2*flow_size.area(), stream);
-
-	if(ret_code != 2*(size_t)flow_size.area()) {
-		if(feof(stream)) {
-			std::cout << "Error reading " << input_flo_filename << ": unexpected end of the file" << std::endl;
-			return 0;
-		}
-		else if(ferror(stream)) {
-			std::cout << "Error reading " << input_flo_filename << std::endl;
-			return 0;
-		}
-	}
-
-	if (fgetc(stream) != EOF) {
-		std::cout << "File is too long" << input_flo_filename << std::endl;
-		return 0;
-	}
-
-	fclose(stream);
-
-	cv::Mat flow(flow_size, CV_32FC2, flo_data);
-
-
 
 	//// Read and check the rest of parameters
 	double thi = atof(argv[3]);
@@ -137,6 +78,8 @@ int main(int argc, char * argv[])
 
 	//// Create a graph of flow vectors with edges connecting neightbour vertices,
 	//// scaled by a degree of angle between them  
+	cv::Size flow_size = flow.size();
+
 	std::list< int > vertices;
 	for(int j=0; j<flow_size.height; ++j) {
 		const float * p_flow = flow.ptr<float>(j);
@@ -253,8 +196,6 @@ int main(int argc, char * argv[])
 		cv::waitKey(0);
 	}
 	
-	delete[] flo_data;
- 
 	return 0;
 }
 
@@ -289,4 +230,74 @@ cv::Vec3b colour_8UC3(int index)
 
 	return cv::Vec3b(b, g, r);
 
+}
+
+bool read_opticalFlow(const std::string & opticalflow_filename, cv::Mat & out)
+{
+	if(opticalflow_filename.empty()) {
+		return false;
+	}
+
+	FILE * stream = fopen(opticalflow_filename.c_str(), "rb");
+	if(stream == 0) {
+		//std::cout << "Could not open " << opticalflow_filename << std::endl;
+		return false;
+	}
+
+	int width, height;
+	float tag;
+
+	if ((int)fread(&tag,    sizeof(float), 1, stream) != 1 ||
+	       	(int)fread(&width,  sizeof(int),   1, stream) != 1 ||
+	       	(int)fread(&height, sizeof(int),   1, stream) != 1) {
+		//std::cout << "Problem reading file " << opticalflow_filename << std::endl;
+		return false;
+	}
+
+	if (tag != 202021.25) { // simple test for correct endian-ness
+		//std::cout << "Wrong tag (possibly due to big-endian machine?)" << std::endl;
+		return false;
+	}
+
+	// another sanity check to see that integers were read correctly (99999 should do the trick...)
+	if (width < 1 || width > 99999) {
+		//std::cout << "Illegal width " << opticalflow_filename << std::endl;
+		return false;
+	}
+
+	if (height < 1 || height > 99999) {
+		//std::cout << "Illegal height " << opticalflow_filename << std::endl;
+		return false;
+	}
+
+	cv::Size flow_size(width, height);
+
+	size_t flo_data_size = 2 * flow_size.area() * sizeof(float);
+	unsigned char * flo_data = new unsigned char[flo_data_size];
+
+	size_t ret_code = fread(flo_data, sizeof(float), 2*flow_size.area(), stream);
+
+	if(ret_code != 2*(size_t)flow_size.area()) {
+		if(feof(stream)) {
+			//std::cout << "Error reading " << opticalflow_filename << ": unexpected end of the file" << std::endl;
+			return false;
+		}
+		else if(ferror(stream)) {
+			//std::cout << "Error reading " << opticalflow_filename << std::endl;
+			return false;
+		}
+	}
+
+	if (fgetc(stream) != EOF) {
+		//std::cout << "File is too long" << opticalflow_filename << std::endl;
+		return false;
+	}
+
+	fclose(stream);
+
+	cv::Mat(flow_size, CV_32FC2, flo_data).copyTo(out);
+
+	delete[] flo_data;
+
+	return true;
 }
