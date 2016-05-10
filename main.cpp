@@ -16,6 +16,9 @@
 #include <boost/property_map/vector_property_map.hpp>
 #include <boost/pending/disjoint_sets.hpp>
 
+#define PI 3.1415926
+#define EPS 2.7182818
+
 const bool verbose=1;
 const bool show_optical_flow=0;
 
@@ -35,6 +38,9 @@ struct edge_t
 double scalar(const double rx, const double ry, const double lx, const double ly);
 double norm(const double x, const double y);
 
+double similarity(const float beta, float scale_factor, float eps=0);
+double similarity(const int beta, float scale_factor, float eps=0);
+
 void randomPermuteRange(int n, std::vector<int>& vec, unsigned int *seed);
 cv::Vec3b colour_8UC3(int index);
 
@@ -42,94 +48,153 @@ bool read_opticalFlow(const std::string & opticalflow_filename, cv::Mat & out);
 
 int main(int argc, char * argv[])
 {
-	//const float PI = 3.1415926;
  
 	// TODO Load optical flow file (.flo) instead of computing one
-	if( argc != 4 + 1) {
+	if( argc != 10 + 1) {
 		std::cout << argv[0] <<" usage:" << std::endl;
-		std::cout << "1 - .flo file" << std::endl;
-		std::cout << "2 - output filename" << std::endl;
-		std::cout << "3 - thi additional threshold; larger thi results in larger segments" << std::endl;
-		std::cout << "4 - eps min allowable norm of a flow vector; only vectors with at least eps norm are considered" << std::endl;
+		std::cout << "1 - image file" << std::endl;
+		std::cout << "2 - .flo file" << std::endl;
+		std::cout << "3 - (0,inf)\t\tscaling factor for distance similarity" << std::endl;
+		std::cout << "4 - (0,inf)\t\tcaling factor for appearence similarity" << std::endl;
+		std::cout << "5 - (0,inf)\t\tscaling factor for motion similarity" << std::endl;
+		std::cout << "6 - [0,1)\t\teps for motion similarity" << std::endl;
+		std::cout << "7 - 2*n-1, n=1,2,3...\tregion size" << std::endl;
+		std::cout << "8 - [0,inf)\t\tthi additional threshold; larger thi results in larger segments" << std::endl;
+		std::cout << "9 - 2*n+1, n=1,2,3...\tsize of window, where all elements are linked with the central" << std::endl;
+		std::cout << "10 - output file" << std::endl;
 		return 1;
 	}
 
-	//// Read and check optical flow
+	//// Input read, check and pre processings
+	// Image
+	cv::Mat image = cv::imread(argv[1]);
+	if(!image.data) {
+		std::cout << "Failed to read image " << argv[1] << std::endl;
+		return 1;
+	}
+
+	// Optical flow
 	cv::Mat flow;
-	if( !read_opticalFlow(std::string(argv[1]), flow)) {
-		std::cout << "Could not read opticalflow: " << argv[1] << std::endl;
+	if( !read_opticalFlow(std::string(argv[2]), flow)) {
+		std::cout << "Could not read opticalflow: " << argv[2] << std::endl;
+		return 1;
+	}
+
+	// Similarity parameters
+	float dist_similarity_scale = atof(argv[3]);
+	if(dist_similarity_scale <= 0) {
+		std::cout << "Scaling factor for distance similarity should be positive" << std::endl;
+		return 1;
+	}
+
+	float appearence_similarity_scale = atof(argv[4]);
+	if(appearence_similarity_scale <= 0) {
+		std::cout << "Scaling factor for appearence similarity should be positive" << std::endl;
+		return 1;
+	}
+
+	float motion_similarity_scale = atof(argv[5]);
+	if(motion_similarity_scale <= 0) {
+		std::cout << "Scaling factor for motion similarity should be positive" << std::endl;
+		return 1;
+	}
+
+	float motion_eps = atof(argv[6]);
+	if(!( 0 <= motion_eps && motion_eps < 1)) {
+		std::cout << "Eps for motion similarity should be in [0, 1) range" << std::endl;
+		return 1;
+	}
+
+	// Neighbourhood region size
+	int neighbourhood_size = atoi(argv[7]);
+	if(!(0 < neighbourhood_size && neighbourhood_size%2 == 1)) {
+		std::cout << "Neighbourhood size should be positive and odd" << std::endl;
 		return 1;
 	}
 
 	//// Read and check the rest of parameters
-	double thi = atof(argv[3]);
+	double thi = atof(argv[8]);
 	if( thi < 0 ) {
 		std::cout << "The thi should be non-negative" << std::endl;
 		return 0;
 	}
 
-	double eps = atof(argv[4]);
-	if( eps <= 0 ) {
-		std::cout << "The eps should be positive" << std::endl;
+	int window_size = atoi(argv[9]);
+	if( !(3 <= window_size && window_size%2 == 1) ) {
+		std::cout << "The size of window should be larger 3 and be odd " << window_size << std::endl;
 		return 0;
 	}
 
-	std::string output_filename(argv[2]);
+	std::string output_filename(argv[10]);
 
-	//// Create a graph of flow vectors with edges connecting neightbour vertices,
-	//// scaled by a degree of angle between them  
+	// Convert optical flow to polar coordiante form
+	for(auto flow_elm = flow.begin<cv::Vec2f>(); flow_elm != flow.end<cv::Vec2f>(); ++flow_elm) {
+		float u = (*flow_elm)[0], v = (*flow_elm)[1];
+		(*flow_elm)[0] = sqrt(pow(u,2) + pow(v,2));
+		(*flow_elm)[1] = atan2(v,u) * 180.0 / PI + 180;
+	}
+
+	// Compute mean and st deviation of the image
+	cv::Mat kernel = cv::Mat::ones(neighbourhood_size, neighbourhood_size, CV_32F) / (float)pow(neighbourhood_size, 2);
+
+	cv::Mat image_mean(image.size(), CV_32FC1);
+	cv::filter2D(image, image_mean, CV_32F, kernel);
+
+	cv::Mat image_dev(image.size(), CV_32FC1);
+	cv::subtract(image, image_mean, image_dev, cv::noArray(), CV_32F);
+	cv::pow(image_dev, 2, image_dev);
+	cv::filter2D(image_dev, image_dev, CV_32F, kernel);
+	cv::pow(image_dev, 0.5, image_dev);
+
+	//// Create a graph model
 	cv::Size flow_size = flow.size();
 
 	std::list< int > vertices;
 	for(int j=0; j<flow_size.height; ++j) {
-		const float * p_flow = flow.ptr<float>(j);
-
-		// NB: p_flow = x-flow component, p_flow+1 = y-flow component
-		for(int i=0; i<flow_size.width; ++i, p_flow+=2) {
-			//std::cout << i << ' ' << j << std::endl;
-			//std::cout << "|" << std::endl;
-			if(norm(*p_flow, *(p_flow+1)) > eps) {
-				vertices.push_back(i + j*flow_size.width);
-			}
+		for(int i=0; i<flow_size.width; ++i) {
+			vertices.push_back(i + j*flow_size.width);
 		}
 	}
 
 	std::list< edge_t > edges;
-	
-	// Add edges along x axis
-	for(int j=0; j<flow_size.height; ++j) {
-		const float * p_flow = flow.ptr<float>(j);
+	for(int v_y=0; v_y < flow_size.height; ++v_y) {
 
-		for(int i=0; i<flow_size.width-1; ++i, p_flow+=2) {
-			double s = scalar(*p_flow, *(p_flow+1), *(p_flow+2), *(p_flow+3));
-			double norm_a = norm(*p_flow, *(p_flow+1));
-			double norm_b = norm(*(p_flow+2), *(p_flow+3));
+		for(int v_x=0; v_x < flow_size.width; ++v_x) {
 
-			if(norm_a > eps && norm_b > eps) {
-				edges.emplace_back(i + j*flow_size.width, i+1 + j*flow_size.width, acos(s / (norm_a * norm_b)));
+			cv::Vec2i v_p(v_x, v_y);
+			cv::Vec2f v_flow = *(v_x + flow.ptr<cv::Vec2f>(v_y));
+			cv::Vec2f v_app(*(v_x + image_mean.ptr<float>(v_y)), *(v_x + image_dev.ptr<float>(v_y)));
+
+			for(int y = std::max(0, v_y - window_size/2); y < std::min(flow_size.height, v_y + 1 + window_size/2); ++y) {
+
+				const cv::Vec2f * p_flow = flow.ptr<cv::Vec2f>(y);
+				const float * p_mean = image_mean.ptr<float>(y);
+				const float * p_dev = image_dev.ptr<float>(y);
+
+				for(int x = std::max(0, v_x - window_size/2); x < std::min(flow_size.width, v_x + 1 + window_size/2); ++x) {
+				
+					cv::Vec2i p(x, y);
+					cv::Vec2f app(*(p_mean + x), *(p_dev + x));
+
+					//float dist_similarity = cv::norm(v_p - p)/dist_similarity_scale;
+					//float appearence_similarity = cv::norm(v_app - app)/ appearence_similarity_scale;
+					//float appearence_similarity = 1;
+					float motion_similarity = cv::norm(v_flow - *(p_flow + x))/motion_similarity_scale;
+
+					//edges.emplace_back(v_x + v_y*flow_size.width, x + y*flow_size.width, cv::norm(cv::Vec3f(dist_similarity, appearence_similarity, motion_similarity)));
+					edges.emplace_back(v_x + v_y*flow_size.width, x + y*flow_size.width, motion_similarity);
+				}
 			}
 		}
 	}
 
-	// Add edges along y axis
-	for(int j=0; j<flow_size.height-1; ++j) {
-		const float * p_flow = flow.ptr<float>(j);
-		const float * p_flow_bot = flow.ptr<float>(j+1);
-
-		for(int i=0; i<flow_size.width; ++i, p_flow+=2, p_flow_bot+=2) {
-			double s = scalar(*p_flow, *(p_flow+1), *p_flow_bot, *(p_flow_bot+1));
-			double norm_a = norm(*p_flow, *(p_flow+1));
-			double norm_b = norm(*p_flow_bot, *(p_flow_bot+1));
-
-			if(norm_a > eps && norm_b > eps) {
-				edges.emplace_back(i + j*flow_size.width, i + (j+1)*flow_size.width, acos(s / (norm_a * norm_b)));
-			}
-		}
+	if(verbose) {
+		std::cout << "Amount of vertices:\t" << vertices.size() << std::endl;
+		std::cout << "Amount of edges:\t" << edges.size() << std::endl;
 	}
-	//std::cout << edges.size() << std::endl;
 
-
-	//// Create initial disjoint sets, each containg a singeltone vertex
+	//// Segmentation
+	// Create initial disjoint sets, each containg a singel vertex
 	typedef boost::vector_property_map<std::size_t> rank_t;
 	typedef boost::vector_property_map< int> parent_t;
 
@@ -142,11 +207,11 @@ int main(int argc, char * argv[])
 		dsets.make_set(*vertex);
 	}
 
-	//// Create MST max weight and size property maps, the first initilized by zeros and the second by ones (i.e. initilal mst contain signle vertex)
+	// Create Minimum ST max weight and size property maps, the first initilized by zeros and the second by ones (i.e. initilal mst contain signle vertex)
 	std::vector<double> mst_max_weight(vertices_count, 0);
 	std::vector<double> mst_size(vertices_count, 1);
 
-	//// Segment the graph into disjoint sets, such that flow vectors form the same set have similar orientation
+	// Segment the graph into disjoint sets, such that flow vectors form the same set have similar orientation
 	edges.sort(); // Sort in ascending order
 
 	for(auto edge = edges.begin(); edge != edges.end(); ++edge) {
@@ -156,7 +221,8 @@ int main(int argc, char * argv[])
 		if( parent_u != parent_v &&
 			edge->_weight < std::min(
 						mst_max_weight[parent_u] + thi / mst_size[parent_u],
-						mst_max_weight[parent_v] + thi / mst_size[parent_v])) {
+						mst_max_weight[parent_v] + thi / mst_size[parent_v])
+					) {
 			dsets.link(parent_u, parent_v); // Equivalent to union(u, v)
 
 		 	int parent = dsets.find_set(parent_u);
@@ -165,7 +231,7 @@ int main(int argc, char * argv[])
 		}	
 	}
 	if(verbose) {
-		std::cout << "Amount of segments: " << dsets.count_sets(vertices.begin(), vertices.end()) << std::endl;
+		std::cout << "Amount of segments:\t" << dsets.count_sets(vertices.begin(), vertices.end()) << std::endl;
 	}
 
 	//// Return output
@@ -207,6 +273,16 @@ double scalar(const double rx, const double ry, const double lx, const double ly
 double norm(const double x, const double y)
 {
 	return sqrt(pow(x,2) + pow(y,2));
+}
+
+double similarity(const float beta, float scale_factor, float eps)
+{
+	return 1 - pow(EPS, beta/scale_factor) + eps;
+}
+
+double similarity(const int beta, float scale_factor, float eps)
+{
+	return 1 - pow(EPS, beta/scale_factor) + eps;
 }
 
 void randomPermuteRange(int n, std::vector<int>& vec, unsigned int *seed)
