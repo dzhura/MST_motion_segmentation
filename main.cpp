@@ -16,7 +16,6 @@
 #include <boost/property_map/vector_property_map.hpp>
 #include <boost/pending/disjoint_sets.hpp>
 
-#define PI 3.1415926
 #define EPS 2.7182818
 
 const bool verbose=1;
@@ -127,14 +126,40 @@ int main(int argc, char * argv[])
 
 	std::string output_filename(argv[10]);
 
-	// Convert optical flow to polar coordiante form
+	// Convert optical flow to polar coordiante form followed by normalization
+	float max_flow_magnitude = 0;
+	float max_flow_angle = 0;
 	for(auto flow_elm = flow.begin<cv::Vec2f>(); flow_elm != flow.end<cv::Vec2f>(); ++flow_elm) {
 		float u = (*flow_elm)[0], v = (*flow_elm)[1];
+
+		if( u > 1e9 || v > 1e9 ) { // if flow value is unknow
+			continue;
+		}
+		if( u == 0 && v == 0 ) { // What TODO with zero flow vectors?
+			continue;
+		}
+
 		(*flow_elm)[0] = sqrt(pow(u,2) + pow(v,2));
-		(*flow_elm)[1] = atan2(v,u) * 180.0 / PI + 180;
+		(*flow_elm)[1] = (v >= 0)?  atan2(v,u) : 2*M_PI + atan2(v,u); // in (0; 2*M_PI]
+
+		if((*flow_elm)[0] > max_flow_magnitude) {
+			max_flow_magnitude = (*flow_elm)[0];
+		}
+		if((*flow_elm)[1] > max_flow_angle) {
+			max_flow_angle = (*flow_elm)[1];
+		}
+	}
+	for(auto flow_elm = flow.begin<cv::Vec2f>(); flow_elm != flow.end<cv::Vec2f>(); ++flow_elm) {
+		if( (*flow_elm)[0] > 1e9 || (*flow_elm)[1] > 1e9 ) { // if flow value is unknow
+			continue;
+		}
+
+		(*flow_elm)[0] /= max_flow_magnitude; // in [0;1]
+		(*flow_elm)[1] /= max_flow_angle; // in (0;1]
 	}
 
 	// Compute mean and st deviation of the image
+	// TODO test it
 	cv::Mat kernel = cv::Mat::ones(neighbourhood_size, neighbourhood_size, CV_32F) / (float)pow(neighbourhood_size, 2);
 
 	cv::Mat image_mean(image.size(), CV_32FC1);
@@ -147,34 +172,30 @@ int main(int argc, char * argv[])
 	cv::pow(image_dev, 0.5, image_dev);
 
 	//// Create a graph model
-	cv::Size flow_size = flow.size();
-
 	std::list< int > vertices;
-	for(int j=0; j<flow_size.height; ++j) {
-		for(int i=0; i<flow_size.width; ++i) {
-			vertices.push_back(i + j*flow_size.width);
-		}
-	}
-
 	std::list< edge_t > edges;
+
+	cv::Size flow_size = flow.size();
 	for(int v_y=0; v_y < flow_size.height; ++v_y) {
 
 		for(int v_x=0; v_x < flow_size.width; ++v_x) {
 
-			cv::Vec2i v_p(v_x, v_y);
-			cv::Vec2f v_flow = *(v_x + flow.ptr<cv::Vec2f>(v_y));
-			cv::Vec2f v_app(*(v_x + image_mean.ptr<float>(v_y)), *(v_x + image_dev.ptr<float>(v_y)));
+			vertices.push_back(v_x + v_y*flow_size.width);
 
-			for(int y = std::max(0, v_y - window_size/2); y < std::min(flow_size.height, v_y + 1 + window_size/2); ++y) {
+			//cv::Vec2i v_p(v_x, v_y);
+			cv::Vec2f v_flow = *(v_x + flow.ptr<cv::Vec2f>(v_y));
+			//cv::Vec2f v_app(*(v_x + image_mean.ptr<float>(v_y)), *(v_x + image_dev.ptr<float>(v_y)));
+
+			for(int y = std::max(0, v_y - window_size/2); y < std::min(flow_size.height, v_y+1 + window_size/2); ++y) {
 
 				const cv::Vec2f * p_flow = flow.ptr<cv::Vec2f>(y);
-				const float * p_mean = image_mean.ptr<float>(y);
-				const float * p_dev = image_dev.ptr<float>(y);
+				//const float * p_mean = image_mean.ptr<float>(y);
+				//const float * p_dev = image_dev.ptr<float>(y);
 
-				for(int x = std::max(0, v_x - window_size/2); x < std::min(flow_size.width, v_x + 1 + window_size/2); ++x) {
+				for(int x = std::max(0, v_x - window_size/2); x < std::min(flow_size.width, v_x+1 + window_size/2); ++x) {
 				
-					cv::Vec2i p(x, y);
-					cv::Vec2f app(*(p_mean + x), *(p_dev + x));
+					//cv::Vec2i p(x, y);
+					//cv::Vec2f app(*(p_mean + x), *(p_dev + x));
 
 					//float dist_similarity = cv::norm(v_p - p)/dist_similarity_scale;
 					//float appearence_similarity = cv::norm(v_app - app)/ appearence_similarity_scale;
