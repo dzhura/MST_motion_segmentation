@@ -21,6 +21,8 @@
 const bool verbose=1;
 const bool show_optical_flow=0;
 
+const int norm_type = cv::NORM_L2;
+
 struct edge_t
 {
 	 int _u, _v;
@@ -35,7 +37,6 @@ struct edge_t
 };
 
 double scalar(const double rx, const double ry, const double lx, const double ly);
-double norm(const double x, const double y);
 
 double similarity(const float beta, float scale_factor, float eps=0);
 double similarity(const int beta, float scale_factor, float eps=0);
@@ -65,21 +66,23 @@ int main(int argc, char * argv[])
 	}
 
 	//// Input read, check and pre processings
-	// Image
 	cv::Mat image = cv::imread(argv[1]);
 	if(!image.data) {
 		std::cout << "Failed to read image " << argv[1] << std::endl;
 		return 1;
 	}
+	if(image.depth() != CV_8U && image.depth() != CV_16U) {
+		std::cout << "No appropriate image depth" << std::endl;
+		std::cout << "It should be unsigned 8-bit or 16-bit depth" << std::endl;
+		return 1;
+	}
 
-	// Optical flow
 	cv::Mat flow;
 	if( !read_opticalFlow(std::string(argv[2]), flow)) {
 		std::cout << "Could not read opticalflow: " << argv[2] << std::endl;
 		return 1;
 	}
 
-	// Similarity parameters
 	float dist_similarity_scale = atof(argv[3]);
 	if(dist_similarity_scale <= 0) {
 		std::cout << "Scaling factor for distance similarity should be positive" << std::endl;
@@ -104,14 +107,12 @@ int main(int argc, char * argv[])
 		return 1;
 	}
 
-	// Neighbourhood region size
 	int neighbourhood_size = atoi(argv[7]);
 	if(!(0 < neighbourhood_size && neighbourhood_size%2 == 1)) {
 		std::cout << "Neighbourhood size should be positive and odd" << std::endl;
 		return 1;
 	}
 
-	//// Read and check the rest of parameters
 	double thi = atof(argv[8]);
 	if( thi < 0 ) {
 		std::cout << "The thi should be non-negative" << std::endl;
@@ -126,7 +127,21 @@ int main(int argc, char * argv[])
 
 	std::string output_filename(argv[10]);
 
-	// Convert optical flow to polar coordiante form followed by normalization
+	//// Preprocessing
+	// Normalize image
+	switch(image.depth()) {
+		case CV_8U:
+			image.convertTo(image, CV_32F, 1.0/255.0);
+			break;
+		case CV_16U:
+			image.convertTo(image, CV_32F, 1.0/65535.0);
+			break;
+	}
+	// Convert image to gray scale
+	cv::Mat gray_image;
+	cv::cvtColor(image, gray_image, CV_RGB2GRAY);
+
+	// Convert optical flow to polar coordiante
 	float max_flow_magnitude = 0;
 	float max_flow_angle = 0;
 	for(auto flow_elm = flow.begin<cv::Vec2f>(); flow_elm != flow.end<cv::Vec2f>(); ++flow_elm) {
@@ -149,6 +164,7 @@ int main(int argc, char * argv[])
 			max_flow_angle = (*flow_elm)[1];
 		}
 	}
+	// Normalize optical flow
 	for(auto flow_elm = flow.begin<cv::Vec2f>(); flow_elm != flow.end<cv::Vec2f>(); ++flow_elm) {
 		if( (*flow_elm)[0] > 1e9 || (*flow_elm)[1] > 1e9 ) { // if flow value is unknow
 			continue;
@@ -162,14 +178,13 @@ int main(int argc, char * argv[])
 	// TODO test it
 	cv::Mat kernel = cv::Mat::ones(neighbourhood_size, neighbourhood_size, CV_32F) / (float)pow(neighbourhood_size, 2);
 
-	cv::Mat image_mean(image.size(), CV_32FC1);
-	cv::filter2D(image, image_mean, CV_32F, kernel);
+	cv::Mat gray_image_mean(gray_image.size(), CV_32FC1);
+	cv::filter2D(gray_image, gray_image_mean, CV_32F, kernel);
 
-	cv::Mat image_dev(image.size(), CV_32FC1);
-	cv::subtract(image, image_mean, image_dev, cv::noArray(), CV_32F);
-	cv::pow(image_dev, 2, image_dev);
-	cv::filter2D(image_dev, image_dev, CV_32F, kernel);
-	cv::pow(image_dev, 0.5, image_dev);
+	cv::Mat gray_image_dev(gray_image.size(), CV_32FC1);
+	cv::pow(gray_image - gray_image_mean, 2, gray_image_dev);
+	cv::filter2D(gray_image_dev, gray_image_dev, CV_32F, kernel);
+	cv::pow(gray_image_dev, 0.5, gray_image_dev);
 
 	//// Create a graph model
 	std::list< int > vertices;
@@ -182,28 +197,29 @@ int main(int argc, char * argv[])
 
 			vertices.push_back(v_x + v_y*flow_size.width);
 
-			//cv::Vec2i v_p(v_x, v_y);
+			cv::Vec2i v_p(v_x, v_y);
 			cv::Vec2f v_flow = *(v_x + flow.ptr<cv::Vec2f>(v_y));
-			//cv::Vec2f v_app(*(v_x + image_mean.ptr<float>(v_y)), *(v_x + image_dev.ptr<float>(v_y)));
+			cv::Vec2f v_app(*(v_x + gray_image_mean.ptr<float>(v_y)), *(v_x + gray_image_dev.ptr<float>(v_y)));
 
 			for(int y = std::max(0, v_y - window_size/2); y < std::min(flow_size.height, v_y+1 + window_size/2); ++y) {
 
 				const cv::Vec2f * p_flow = flow.ptr<cv::Vec2f>(y);
-				//const float * p_mean = image_mean.ptr<float>(y);
-				//const float * p_dev = image_dev.ptr<float>(y);
+				const float * p_mean = gray_image_mean.ptr<float>(y);
+				const float * p_dev = gray_image_dev.ptr<float>(y);
 
 				for(int x = std::max(0, v_x - window_size/2); x < std::min(flow_size.width, v_x+1 + window_size/2); ++x) {
 				
-					//cv::Vec2i p(x, y);
-					//cv::Vec2f app(*(p_mean + x), *(p_dev + x));
+					cv::Vec2i p(x, y);
+					cv::Vec2f app(*(p_mean + x), *(p_dev + x));
 
-					//float dist_similarity = cv::norm(v_p - p)/dist_similarity_scale;
-					//float appearence_similarity = cv::norm(v_app - app)/ appearence_similarity_scale;
-					//float appearence_similarity = 1;
-					float motion_similarity = cv::norm(v_flow - *(p_flow + x))/motion_similarity_scale;
+					float dist_similarity = cv::norm(v_p - p, norm_type)/(window_size*dist_similarity_scale*sqrt(2)/2); // Normalized; in [0;1] range
+					float appearence_similarity = cv::norm(v_app - app, norm_type)/ appearence_similarity_scale;
+					float motion_similarity = cv::norm(v_flow - *(p_flow + x), norm_type)/motion_similarity_scale;
 
-					//edges.emplace_back(v_x + v_y*flow_size.width, x + y*flow_size.width, cv::norm(cv::Vec3f(dist_similarity, appearence_similarity, motion_similarity)));
-					edges.emplace_back(v_x + v_y*flow_size.width, x + y*flow_size.width, motion_similarity);
+					edges.emplace_back(v_x + v_y*flow_size.width, x + y*flow_size.width, cv::norm(cv::Vec3f(dist_similarity, motion_similarity, appearence_similarity), norm_type));
+					//edges.emplace_back(v_x + v_y*flow_size.width, x + y*flow_size.width, cv::norm(cv::Vec3f(dist_similarity, motion_similarity), norm_type));
+					//edges.emplace_back(v_x + v_y*flow_size.width, x + y*flow_size.width, cv::norm(cv::Vec3f(appearence_similarity, motion_similarity), norm_type));
+					//edges.emplace_back(v_x + v_y*flow_size.width, x + y*flow_size.width, motion_similarity);
 				}
 			}
 		}
@@ -289,11 +305,6 @@ int main(int argc, char * argv[])
 double scalar(const double rx, const double ry, const double lx, const double ly)
 {
 	return rx*lx + ry*ly;
-}
-
-double norm(const double x, const double y)
-{
-	return sqrt(pow(x,2) + pow(y,2));
 }
 
 double similarity(const float beta, float scale_factor, float eps)
