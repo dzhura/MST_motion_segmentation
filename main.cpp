@@ -197,29 +197,29 @@ int main(int argc, char * argv[])
 
 			vertices.push_back(v_x + v_y*flow_size.width);
 
-			cv::Vec2i v_p(v_x, v_y);
 			cv::Vec2f v_flow = *(v_x + flow.ptr<cv::Vec2f>(v_y));
-			cv::Vec2f v_app(*(v_x + gray_image_mean.ptr<float>(v_y)), *(v_x + gray_image_dev.ptr<float>(v_y)));
+			//cv::Vec2i v_p(v_x, v_y);
+			//cv::Vec2f v_app(*(v_x + gray_image_mean.ptr<float>(v_y)), *(v_x + gray_image_dev.ptr<float>(v_y)));
 
 			for(int y = std::max(0, v_y - window_size/2); y < std::min(flow_size.height, v_y+1 + window_size/2); ++y) {
 
 				const cv::Vec2f * p_flow = flow.ptr<cv::Vec2f>(y);
-				const float * p_mean = gray_image_mean.ptr<float>(y);
-				const float * p_dev = gray_image_dev.ptr<float>(y);
+				//const float * p_mean = gray_image_mean.ptr<float>(y);
+				//const float * p_dev = gray_image_dev.ptr<float>(y);
 
 				for(int x = std::max(0, v_x - window_size/2); x < std::min(flow_size.width, v_x+1 + window_size/2); ++x) {
 				
-					cv::Vec2i p(x, y);
-					cv::Vec2f app(*(p_mean + x), *(p_dev + x));
+					//cv::Vec2i p(x, y);
+					//cv::Vec2f app(*(p_mean + x), *(p_dev + x));
 
-					float dist_similarity = cv::norm(v_p - p, norm_type)/(window_size*dist_similarity_scale*sqrt(2)/2); // Normalized; in [0;1] range
-					float appearence_similarity = cv::norm(v_app - app, norm_type)/ appearence_similarity_scale;
 					float motion_similarity = cv::norm(v_flow - *(p_flow + x), norm_type)/motion_similarity_scale;
+					//float dist_similarity = cv::norm(v_p - p, norm_type)/(window_size*dist_similarity_scale*sqrt(2)/2); // Normalized; in [0;1] range
+					//float appearence_similarity = cv::norm(v_app - app, norm_type)/ appearence_similarity_scale;
 
-					edges.emplace_back(v_x + v_y*flow_size.width, x + y*flow_size.width, cv::norm(cv::Vec3f(dist_similarity, motion_similarity, appearence_similarity), norm_type));
+					edges.emplace_back(v_x + v_y*flow_size.width, x + y*flow_size.width, motion_similarity);
 					//edges.emplace_back(v_x + v_y*flow_size.width, x + y*flow_size.width, cv::norm(cv::Vec3f(dist_similarity, motion_similarity), norm_type));
 					//edges.emplace_back(v_x + v_y*flow_size.width, x + y*flow_size.width, cv::norm(cv::Vec3f(appearence_similarity, motion_similarity), norm_type));
-					//edges.emplace_back(v_x + v_y*flow_size.width, x + y*flow_size.width, motion_similarity);
+					//edges.emplace_back(v_x + v_y*flow_size.width, x + y*flow_size.width, cv::norm(cv::Vec3f(dist_similarity, motion_similarity, appearence_similarity), norm_type));
 				}
 			}
 		}
@@ -263,7 +263,7 @@ int main(int argc, char * argv[])
 			dsets.link(parent_u, parent_v); // Equivalent to union(u, v)
 
 		 	int parent = dsets.find_set(parent_u);
-			mst_max_weight[parent] = std::max(mst_max_weight[parent_u], mst_max_weight[parent_v]);
+			mst_max_weight[parent] = std::max(edge->_weight, std::max(mst_max_weight[parent_u], mst_max_weight[parent_v])); // due to the condition above
 			mst_size[parent] = mst_size[parent_u] + mst_size[parent_v];
 		}	
 	}
