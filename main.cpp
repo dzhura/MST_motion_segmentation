@@ -1,11 +1,14 @@
 #include <iostream>
-#include <cmath> // abs pow sqrt
+#include <cmath> // abs pow sqrt M_PI
 #include <list>
 #include <utility> // pair
 #include <vector>
+#include <fstream> // C++ style file reading
 #include <stdio.h> // C-style file reading
 #include <stdlib.h> // rand_r
 #include <cassert>
+
+#include <libgen.h> // dirname
 
 #include <opencv2/core/core.hpp>
 #include <opencv2/gpu/gpu.hpp>
@@ -20,7 +23,6 @@
 
 const bool verbose=1;
 
-const int amount_of_frames=5;
 const int norm_type = cv::NORM_L2;
 
 struct edge_t
@@ -46,37 +48,56 @@ bool read_opticalFlow(const std::string & opticalflow_filename, cv::Mat & out);
 
 int main(int argc, char * argv[])
 {
-	if( argc != 16 + 1) {
+	if( argc != 9 + 1) {
 		std::cout << argv[0] <<" usage:" << std::endl;
-		std::cout << "1\tfirst frame" << std::endl;
-		std::cout << "2\tsecond frame" << std::endl;
-		std::cout << "3\tthird frame" << std::endl;
-		std::cout << "4\tfourth frame" << std::endl;
-		std::cout << "5\tfifth frame" << std::endl;
-		std::cout << "6\t(.flo) optical flow for the second frame" << std::endl;
-		std::cout << "7\t(.flo) optical flow for the third frame" << std::endl;
-		std::cout << "8\t(.flo) optical flow for the fourth frame" << std::endl;
-		std::cout << "9\t(0,inf)\t\tinverse weight for distance similarity" << std::endl;
-		std::cout << "10\t(0,inf)\t\tinverse weight for appearence similarity" << std::endl;
-		std::cout << "11\t(0,inf)\t\tinverse weight for motion similarity" << std::endl;
-		std::cout << "12\t2*n-1, n=1,2,3...\tregion size for appearence similarity" << std::endl;
-		std::cout << "13\t[0,inf)\t\tthi additional threshold; larger thi results in larger segments" << std::endl;
-		std::cout << "14\t2*n+1, n=1,2,3...\tsize of spatial window, where all elements are linked with the central" << std::endl;
-		std::cout << "15\t2*n-1, n=1,2,3...\tsize of temporal window, where all elements are linked with the central" << std::endl;
-		std::cout << "16\toutput file" << std::endl;
+		std::cout << "1\tfile list, including amount of frames, amount of frames for segmentation, frames to skip, frame paths and optical flow paths" << std::endl;
+		std::cout << "2\t(0,inf)\t\tinverse weight for distance similarity" << std::endl;
+		std::cout << "3\t(0,inf)\t\tinverse weight for appearence similarity" << std::endl;
+		std::cout << "4\t(0,inf)\t\tinverse weight for motion similarity" << std::endl;
+		std::cout << "5\t2*n-1, n=1,2,3...\tregion size for appearence similarity" << std::endl;
+		std::cout << "6\t[0,inf)\t\tthi additional threshold; larger thi results in larger segments" << std::endl;
+		std::cout << "7\t2*n+1, n=1,2,3...\tsize of spatial window, where all elements are linked with the central" << std::endl;
+		std::cout << "8\t2*n-1, n=1,2,3...\tsize of temporal window, where all elements are linked with the central" << std::endl;
+		std::cout << "9\toutput file" << std::endl;
 		return 1;
 	}
 
 	//// Input read, check and pre processings
-	std::vector<cv::Mat> frame(amount_of_frames);
-	for(int i=0; i<amount_of_frames; ++i) {
-		frame[i] = cv::imread(argv[i+1]);
+	std::ifstream infile(argv[1]);
+	if(!infile.is_open()) {
+		std::cout << "Could not open " << argv[1] << std::endl;
+		return 1;
+	}
+	std::string dname( dirname(argv[1]) );
+
+	int amount_of_frames=0, amount_of_frames_for_seg = 0, frames_to_skip=0;
+	infile >> amount_of_frames >> amount_of_frames_for_seg >> frames_to_skip;
+
+	assert(0 < amount_of_frames);
+	assert(0 < frames_to_skip); // Very first frame is never segmented
+	assert(0 < amount_of_frames_for_seg);
+	assert(amount_of_frames_for_seg + frames_to_skip < amount_of_frames); // Very last frame is never segmented
+
+	// Skip first frames
+	for(int i=0; i<frames_to_skip-1; ++i) {
+		std::string dummy;
+		infile >> dummy;
+	}
+
+	// Always load first and last frames for appearence similarity computation
+	std::vector<cv::Mat> frame(amount_of_frames_for_seg+2);
+	for(size_t i=0; i<frame.size(); ++i) {
+		std::string frame_bname;
+		infile >> frame_bname;
+		std::string frame_name = dname + '/' + frame_bname;
+
+		frame[i] = cv::imread(frame_name);
 		if(!frame[i].data) {
-			std::cout << "Failed to read image " << argv[i+1] << std::endl;
+			std::cout << "Failed to read image " << frame_name << std::endl;
 			return 1;
 		}
 		if(frame[i].depth() != CV_8U && frame[i].depth() != CV_16U) {
-			std::cout << argv[i+1] << " has inappropriate image depth" << std::endl;
+			std::cout << frame_name << " has inappropriate image depth" << std::endl;
 			std::cout << "It should be unsigned 8-bit or unsigned 16-bit depth" << std::endl;
 			return 1;
 		}
@@ -86,66 +107,84 @@ int main(int argc, char * argv[])
 		}
 	}
 
-	std::vector<cv::Mat> flow(amount_of_frames);
-	for(int i=1; i<amount_of_frames-1; ++i) {
-		if( !read_opticalFlow(std::string(argv[i + amount_of_frames]), flow[i])) {
-			std::cout << "Could not read optical flow: " << argv[i + amount_of_frames] << std::endl;
+	// Skip last frames
+	for(size_t i=0; i < amount_of_frames - (frames_to_skip-1) - frame.size(); ++i) {
+		std::string dummy;
+		infile >> dummy;
+	}
+
+	// Skip first opt flows
+	for(int i=0; i<frames_to_skip; ++i) {
+		std::string dummy;
+		infile >> dummy;
+	}
+
+	std::vector<cv::Mat> flow(amount_of_frames_for_seg+2);
+	for(int i=1; i<amount_of_frames_for_seg+2-1; ++i) {
+		std::string opt_flow_bname;
+		infile >> opt_flow_bname;
+		std::string opt_flow_name = dname + '/' + opt_flow_bname;
+
+		if( !read_opticalFlow(opt_flow_name, flow[i])) {
+			std::cout << "Could not read optical flow: " << opt_flow_name << std::endl;
 			return 1;
 		}
 		if(flow[i].size() != frame[0].size()) {
-			std::cout << "Size of optical flow " << argv[i + amount_of_frames] << " is different from size of the original image" << std::endl;
+			std::cout << "Size of optical flow " << opt_flow_name << " is different from size of the original image" << std::endl;
 			return 1;
 		}
 	}
+	infile.close();
 
-	float dist_similarity_scale = atof(argv[1 + 2*amount_of_frames + 2]);
+	float dist_similarity_scale = atof(argv[2]);
 	if(dist_similarity_scale <= 0) {
 		std::cout << "Scaling factor for distance similarity should be positive" << std::endl;
 		return 1;
 	}
 
-	float appearence_similarity_scale = atof(argv[2 + 2*amount_of_frames - 2]);
+	float appearence_similarity_scale = atof(argv[3]);
 	if(appearence_similarity_scale <= 0) {
 		std::cout << "Scaling factor for appearence similarity should be positive" << std::endl;
 		return 1;
 	}
 
-	float motion_similarity_scale = atof(argv[3 + 2*amount_of_frames - 2]);
+	float motion_similarity_scale = atof(argv[4]);
 	if(motion_similarity_scale <= 0) {
 		std::cout << "Scaling factor for motion similarity should be positive" << std::endl;
 		return 1;
 	}
 
-	int neighbourhood_size = atoi(argv[4 + 2*amount_of_frames - 2]);
+	int neighbourhood_size = atoi(argv[5]);
 	if(!(0 < neighbourhood_size && neighbourhood_size%2 == 1)) {
 		std::cout << "Neighbourhood size should be positive and odd" << std::endl;
 		return 1;
 	}
 
-	double thi = atof(argv[5 + 2*amount_of_frames - 2]);
+	double thi = atof(argv[6]);
 	if( thi < 0 ) {
 		std::cout << "The thi should be non-negative" << std::endl;
 		return 1;
 	}
 
-	int spatial_window_size = atoi(argv[6 + 2*amount_of_frames - 2]);
+	int spatial_window_size = atoi(argv[7]);
 	if( !(3 <= spatial_window_size && spatial_window_size < cv::min(frame[0].cols, frame[0].rows) && spatial_window_size%2 == 1) ) {
 		std::cout << "The size of special window should be odd, not less 3 and not large frame size " << spatial_window_size << std::endl;
 		return 1;
 	}
 
-	int temporal_window_size = atoi(argv[7 + 2*amount_of_frames - 2]);
-	if( !(0 < temporal_window_size && temporal_window_size <= amount_of_frames && temporal_window_size%2 == 1) ) {
-		std::cout << "The size of temporal window should be odd, positive and not large amount of frames " << temporal_window_size << std::endl;
+	int temporal_window_size = atoi(argv[8]);
+	if( !(0 < temporal_window_size && temporal_window_size <= amount_of_frames_for_seg && temporal_window_size%2 == 1) ) {
+		std::cout << "The size of temporal window should be odd, positive and not large amount of frames" << std::endl;
+		std::cout << "arg.8: " << temporal_window_size << std::endl;
 		return 1;
 	}
 
-	std::string base_output_filename(argv[8 + 2*amount_of_frames - 2]);
+	std::string base_output_filename(argv[9]);
 
 	//// Preprocessing
 	// Normalize and convert to gray scale
-	std::vector<cv::Mat> gray_frame(amount_of_frames);
-	for(int i=0; i < amount_of_frames; ++i) {
+	std::vector<cv::Mat> gray_frame(frame.size());
+	for(size_t i=0; i < gray_frame.size(); ++i) {
 		switch(frame[i].depth()) {
 			case CV_8U:
 				frame[i].convertTo(frame[i], CV_32F, 1.0/255.0);
@@ -159,9 +198,9 @@ int main(int argc, char * argv[])
 
 	// Compute mean and st deviation of the images
 	// TODO test it
-	std::vector<cv::Mat> gray_frame_mean(amount_of_frames);
-	std::vector<cv::Mat> gray_frame_dev(amount_of_frames);
-	for(int i=1; i < amount_of_frames-1; ++i) {
+	std::vector<cv::Mat> gray_frame_mean(gray_frame.size());
+	std::vector<cv::Mat> gray_frame_dev(gray_frame.size());
+	for(size_t i=1; i < gray_frame.size()-1; ++i) {
 		gray_frame_mean[i].create(gray_frame[0].size(), CV_32FC1);
 		gray_frame_dev[i].create(gray_frame[0].size(), CV_32FC1);
 
@@ -176,8 +215,8 @@ int main(int argc, char * argv[])
 	}
 
 	// Compute normalized forward/backward appearence change
-	std::vector<cv::Mat> app_change(amount_of_frames);
-	for(int i=1; i<amount_of_frames-1; ++i) {
+	std::vector<cv::Mat> app_change(gray_frame.size());
+	for(size_t i=1; i<gray_frame.size()-1; ++i) {
 		cv::Mat backward_app_change(gray_frame[0].size(), CV_32FC1);
 		cv::Mat forward_app_change(gray_frame[0].size(), CV_32FC1);
 
@@ -197,7 +236,7 @@ int main(int argc, char * argv[])
 	}
 
 	// Convert optical flow to polar coordiantes and normalize
-	for(int i=1; i < amount_of_frames-1; ++i) {
+	for(size_t i=1; i < frame.size()-1; ++i) {
 		float max_flow_magnitude = 0;
 		float max_flow_angle = 0;
 		for(auto flow_elm = flow[i].begin<cv::Vec2f>(); flow_elm != flow[i].end<cv::Vec2f>(); ++flow_elm) {
@@ -234,8 +273,9 @@ int main(int argc, char * argv[])
 	std::list< int > vertices;
 	std::list< edge_t > edges;
 
+	// Pixel indexes are shifted one frame back
 	cv::Size video_resolution = frame[0].size();
-	for(int v_t=1; v_t < amount_of_frames-1; ++v_t) {
+	for(size_t v_t=1; v_t < frame.size()-1; ++v_t) {
 	for(int v_y=0; v_y < video_resolution.height; ++v_y) {
 	for(int v_x=0; v_x < video_resolution.width; ++v_x) {
 
@@ -246,7 +286,7 @@ int main(int argc, char * argv[])
 		//cv::Vec3i v_p(v_x, v_y, v_t);
 		//cv::Vec4f v_app(gray_frame_mean[v_t].at<float>(v_y, v_x), gray_frame_dev[v_t].at<float>(v_y, v_x), app_change[v_t].at<cv::Vec2f>(v_y, v_x)[0], app_change[v_t].at<cv::Vec2f>(v_y, v_x)[1]);
 
-		for(int t = std::max(1, v_t - temporal_window_size/2); t < std::min(amount_of_frames-1, v_t+1 + temporal_window_size/2); ++t) {
+		for(size_t t = std::max((size_t)1, v_t - temporal_window_size/2); t < std::min(frame.size()-1, v_t+1 + temporal_window_size/2); ++t) {
 		for(int y = std::max(0, v_y - spatial_window_size/2); y < std::min(video_resolution.height, v_y+1 + spatial_window_size/2); ++y) {
 		for(int x = std::max(0, v_x - spatial_window_size/2); x < std::min(video_resolution.width, v_x+1 + spatial_window_size/2); ++x) {
 		
@@ -259,6 +299,8 @@ int main(int argc, char * argv[])
 
 			int index = x + y*video_resolution.width + (t-1)*video_resolution.area(); // skip first frame
 			edges.emplace_back(v_index, index, motion_similarity);
+			//edges.emplace_back(v_index, index, appearence_similarity);
+			//edges.emplace_back(v_index, index, dist_similarity);
 			//edges.emplace_back(v_index, index, cv::norm(cv::Vec3f(dist_similarity, motion_similarity, appearence_similarity), norm_type));
 			//edges.emplace_back(v_index, index, cv::norm(cv::Vec3f(dist_similarity, motion_similarity), norm_type));
 			//edges.emplace_back(v_index, index, cv::norm(cv::Vec3f(appearence_similarity, motion_similarity), norm_type));
@@ -317,8 +359,9 @@ int main(int argc, char * argv[])
 	unsigned int seed = rand() % 1000000;
 	randomPermuteRange(pow(256,3), random_numbers, &seed); 
 
-	std::vector<cv::Mat> output(amount_of_frames-2); // skip first and last frames
-	for(int i=0; i<amount_of_frames-2; ++i) {
+	// Do not print the first and the last frames
+	std::vector<cv::Mat> output(frame.size()-2);
+	for(size_t i=0; i<output.size(); ++i) {
 		cv::Mat temp = cv::Mat::zeros(video_resolution, CV_8UC3);
 		temp.copyTo(output[i]);
 	}
@@ -331,7 +374,7 @@ int main(int argc, char * argv[])
 		output[t].at<cv::Vec3b>(y,x) = colour_8UC3( random_numbers[dsets.find_set(*vertex)] );
 	}
 
-	for(int i=0; i < amount_of_frames-2; ++i) {
+	for(size_t i=0; i < output.size()-1; ++i) {
 		std::string output_filename = base_output_filename + '_' + std::to_string(i) + ".png";
 		cv::imwrite(output_filename, output[i]);
 	}
