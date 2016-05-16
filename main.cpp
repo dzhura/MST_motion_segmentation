@@ -38,9 +38,6 @@ struct edge_t
 	}
 };
 
-double similarity(const float beta, float scale_factor, float eps=0);
-double similarity(const int beta, float scale_factor, float eps=0);
-
 void randomPermuteRange(int n, std::vector<int>& vec, unsigned int *seed);
 cv::Vec3b colour_8UC3(int index);
 
@@ -114,7 +111,7 @@ int main(int argc, char * argv[])
 	}
 
 	// Skip first opt flows
-	for(int i=0; i<frames_to_skip; ++i) {
+	for(int i=0; i<frames_to_skip-1; ++i) {
 		std::string dummy;
 		infile >> dummy;
 	}
@@ -236,6 +233,7 @@ int main(int argc, char * argv[])
 	}
 
 	// Convert optical flow to polar coordiantes and normalize
+	/*
 	for(size_t i=1; i < frame.size()-1; ++i) {
 		float max_flow_magnitude = 0;
 		float max_flow_angle = 0;
@@ -268,6 +266,7 @@ int main(int argc, char * argv[])
 			(*flow_elm)[1] /= max_flow_angle; // in (0;1]
 		}
 	}
+	*/
 
 	//// Create a graph model
 	std::list< int > vertices;
@@ -338,14 +337,14 @@ int main(int argc, char * argv[])
 		int parent_v = dsets.find_set(edge->_v);
 		
 		if( parent_u != parent_v &&
-			edge->_weight < std::min(
+			edge->_weight <= std::min(
 						mst_max_weight[parent_u] + thi / mst_size[parent_u], // Similarity criteria
 						mst_max_weight[parent_v] + thi / mst_size[parent_v])
 					) {
 			dsets.link(parent_u, parent_v); // Equivalent to union(u, v)
 
 		 	int parent = dsets.find_set(parent_u);
-			mst_max_weight[parent] = std::max(edge->_weight, std::max(mst_max_weight[parent_u], mst_max_weight[parent_v]));
+			mst_max_weight[parent] = edge->_weight; // Edges are sorted
 			mst_size[parent] = mst_size[parent_u] + mst_size[parent_v];
 		}	
 	}
@@ -374,22 +373,12 @@ int main(int argc, char * argv[])
 		output[t].at<cv::Vec3b>(y,x) = colour_8UC3( random_numbers[dsets.find_set(*vertex)] );
 	}
 
-	for(size_t i=0; i < output.size()-1; ++i) {
+	for(size_t i=0; i < output.size(); ++i) {
 		std::string output_filename = base_output_filename + '_' + std::to_string(i) + ".png";
 		cv::imwrite(output_filename, output[i]);
 	}
 
 	return 0;
-}
-
-double similarity(const float beta, float scale_factor, float eps)
-{
-	return 1 - pow(EPS, beta/scale_factor) + eps;
-}
-
-double similarity(const int beta, float scale_factor, float eps)
-{
-	return 1 - pow(EPS, beta/scale_factor) + eps;
 }
 
 void randomPermuteRange(int n, std::vector<int>& vec, unsigned int *seed)

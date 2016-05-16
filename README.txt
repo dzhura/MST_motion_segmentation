@@ -9,3 +9,5 @@ optical_flow_2
 optical_flow_3
 ...
 optical_flow_n-1
+
+amoun_of_frames_to_skip is more or equal to 1
