@@ -23,8 +23,6 @@
 
 const bool verbose=1;
 
-const int norm_type = cv::NORM_L2;
-
 struct edge_t
 {
 	 int _u, _v;
@@ -37,6 +35,11 @@ struct edge_t
 		return this->_weight < edge._weight;
 	}
 };
+
+// Returns nan is lo or ro are zero vectros
+float cosine_similarity(const cv::Vec2f & lo, const cv::Vec2f & ro);
+
+float l2_similarity(const cv::Vec2f & lo, const cv::Vec2f & ro);
 
 void randomPermuteRange(int n, std::vector<int>& vec, unsigned int *seed);
 cv::Vec3b colour_8UC3(int index);
@@ -194,7 +197,6 @@ int main(int argc, char * argv[])
 	}
 
 	// Compute mean and st deviation of the images
-	// TODO test it
 	std::vector<cv::Mat> gray_frame_mean(gray_frame.size());
 	std::vector<cv::Mat> gray_frame_dev(gray_frame.size());
 	for(size_t i=1; i < gray_frame.size()-1; ++i) {
@@ -292,17 +294,19 @@ int main(int argc, char * argv[])
 			//cv::Vec3i p(x, y, t);
 			//cv::Vec4f app(gray_frame_mean[t].at<float>(y, x), gray_frame_dev[t].at<float>(y, x), app_change[t].at<cv::Vec2f>(y, x)[0], app_change[t].at<cv::Vec2f>(y, x)[1]);
 
-			float motion_similarity = cv::norm(v_flow - flow[t].at<cv::Vec2f>(y,x), norm_type)/motion_similarity_scale;
-			//float dist_similarity = cv::norm(v_p - p, norm_type)/dist_similarity_scale; // TODO Normalization
-			//float appearence_similarity = cv::norm(v_app - app, norm_type)/ appearence_similarity_scale;
+			float motion_similarity = l2_similarity(v_flow, flow[t].at<cv::Vec2f>(y,x))/motion_similarity_scale;
+			//float motion_similarity = cosine_similarity(v_flow, flow[t].at<cv::Vec2f>(y,x))/motion_similarity_scale;
+			//float dist_penalty = cv::norm(v_p - p, cv::NORM_L2); // TODO Normalization
+			//float appearence_similarity = l2_similarity(v_app, app)/ appearence_similarity_scale;
 
 			int index = x + y*video_resolution.width + (t-1)*video_resolution.area(); // skip first frame
 			edges.emplace_back(v_index, index, motion_similarity);
+			//edges.emplace_back(v_index, index, dist_penalty*motion_similarity);
+			//
 			//edges.emplace_back(v_index, index, appearence_similarity);
-			//edges.emplace_back(v_index, index, dist_similarity);
-			//edges.emplace_back(v_index, index, cv::norm(cv::Vec3f(dist_similarity, motion_similarity, appearence_similarity), norm_type));
-			//edges.emplace_back(v_index, index, cv::norm(cv::Vec3f(dist_similarity, motion_similarity), norm_type));
-			//edges.emplace_back(v_index, index, cv::norm(cv::Vec3f(appearence_similarity, motion_similarity), norm_type));
+			//edges.emplace_back(v_index, index, l2_similarity(cv::Vec3f(dist_similarity, motion_similarity, appearence_similarity)));
+			//edges.emplace_back(v_index, index, l2_similarity(cv::Vec3f(dist_similarity, motion_similarity)));
+			//edges.emplace_back(v_index, index, l2_similarity(cv::Vec3f(appearence_similarity, motion_similarity)));
 		} } }
 	} } }
 	if(verbose) {
@@ -379,6 +383,20 @@ int main(int argc, char * argv[])
 	}
 
 	return 0;
+}
+
+float cosine_similarity(const cv::Vec2f & lo, const cv::Vec2f & ro)
+{
+	float similarity  = (lo[0]*ro[0] + lo[1]*ro[1]) / (cv::norm(lo) * cv::norm(ro));
+
+	if(isnan(similarity)) {
+		return similarity;
+	}
+	return (similarity > 0)? 1 - similarity : 1;
+}
+float l2_similarity(const cv::Vec2f & lo, const cv::Vec2f & ro)
+{
+	return cv::norm(lo - ro, cv::NORM_L2);
 }
 
 void randomPermuteRange(int n, std::vector<int>& vec, unsigned int *seed)
