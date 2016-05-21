@@ -86,11 +86,28 @@ int main(int argc, char * argv[])
 
 	// Always load first and last frames for appearence similarity computation
 	std::vector<cv::Mat> frame(amount_of_frames_for_seg+2);
-	for(size_t i=0; i<frame.size(); ++i) {
+
+	std::string _frame_bname;
+	infile >> _frame_bname;
+	std::string _frame_name = dname + '/' + _frame_bname;
+
+	frame[0] = cv::imread(_frame_name);
+	if(!frame[0].data) {
+		std::cout << "Failed to read image " << _frame_name << std::endl;
+		return 1;
+	}
+	if(frame[0].depth() != CV_8U && frame[0].depth() != CV_16U) {
+		std::cout << _frame_name << " has inappropriate image depth" << std::endl;
+		std::cout << "It should be unsigned 8-bit or unsigned 16-bit depth" << std::endl;
+		return 1;
+	}
+
+	for(size_t i=1; i<frame.size(); ++i) {
 		std::string frame_bname;
 		infile >> frame_bname;
 		std::string frame_name = dname + '/' + frame_bname;
 
+		/*
 		frame[i] = cv::imread(frame_name);
 		if(!frame[i].data) {
 			std::cout << "Failed to read image " << frame_name << std::endl;
@@ -105,6 +122,7 @@ int main(int argc, char * argv[])
 			std::cout << "Frames aren`t of the same size" << std::endl;
 			return 1;
 		}
+		*/
 	}
 
 	// Skip last frames
@@ -183,6 +201,7 @@ int main(int argc, char * argv[])
 
 	//// Preprocessing
 	// Normalize and convert to gray scale
+	/*
 	std::vector<cv::Mat> gray_frame(frame.size());
 	for(size_t i=0; i < gray_frame.size(); ++i) {
 		switch(frame[i].depth()) {
@@ -233,6 +252,7 @@ int main(int argc, char * argv[])
 
 		cv::merge(separate_app_change, app_change[i]);
 	}
+	*/
 
 	// Convert optical flow to polar coordiantes and normalize
 	/*
@@ -284,29 +304,53 @@ int main(int argc, char * argv[])
 		vertices.push_back(v_index);
 
 		cv::Vec2f v_flow = flow[v_t].at<cv::Vec2f>(v_y, v_x);
-		//cv::Vec3i v_p(v_x, v_y, v_t);
+		cv::Vec3i v_p(v_x, v_y, v_t);
 		//cv::Vec4f v_app(gray_frame_mean[v_t].at<float>(v_y, v_x), gray_frame_dev[v_t].at<float>(v_y, v_x), app_change[v_t].at<cv::Vec2f>(v_y, v_x)[0], app_change[v_t].at<cv::Vec2f>(v_y, v_x)[1]);
 
-		for(size_t t = std::max((size_t)1, v_t - temporal_window_size/2); t < std::min(frame.size()-1, v_t+1 + temporal_window_size/2); ++t) {
+		for(int x = v_x+1; x < std::min(video_resolution.width, v_x+1 + spatial_window_size/2); ++x) {
+		
+			cv::Vec3i p(x, v_y, v_t);
+			//cv::Vec4f app(gray_frame_mean[v_t].at<float>(v_y, x), gray_frame_dev[v_t].at<float>(v_y, x), app_change[v_t].at<cv::Vec2f>(v_y, x)[0], app_change[v_t].at<cv::Vec2f>(v_y, x)[1]);
+
+			float motion_similarity = l2_similarity(v_flow, flow[v_t].at<cv::Vec2f>(v_y,x))/motion_similarity_scale;
+			float dist_penalty = cv::norm(v_p - p, cv::NORM_L2); // TODO Normalization
+			//float motion_similarity = cosine_similarity(v_flow, flow[v_t].at<cv::Vec2f>(v_y,x))/motion_similarity_scale;
+			//float appearence_similarity = l2_similarity(v_app, app)/ appearence_similarity_scale;
+
+			int index = x + v_y*video_resolution.width + (v_t-1)*video_resolution.area(); // skip first frame
+			edges.emplace_back(v_index, index, dist_penalty*motion_similarity);
+			//edges.emplace_back(v_index, index, motion_similarity);
+		}
+		for(int y = v_y+1; y < std::min(video_resolution.height, v_y+1 + spatial_window_size/2); ++y) {
+		for(int x = std::max(0, v_x - spatial_window_size/2); x < std::min(video_resolution.width, v_x+1 + spatial_window_size/2); ++x) {
+		
+			cv::Vec3i p(x, y, v_t);
+			//cv::Vec4f app(gray_frame_mean[v_t].at<float>(y, x), gray_frame_dev[v_t].at<float>(y, x), app_change[v_t].at<cv::Vec2f>(y, x)[0], app_change[v_t].at<cv::Vec2f>(y, x)[1]);
+
+			float motion_similarity = l2_similarity(v_flow, flow[v_t].at<cv::Vec2f>(y,x))/motion_similarity_scale;
+			float dist_penalty = cv::norm(v_p - p, cv::NORM_L2); // TODO Normalization
+			//float motion_similarity = cosine_similarity(v_flow, flow[v_t].at<cv::Vec2f>(y,x))/motion_similarity_scale;
+			//float appearence_similarity = l2_similarity(v_app, app)/ appearence_similarity_scale;
+
+			int index = x + y*video_resolution.width + (v_t-1)*video_resolution.area(); // skip first frame
+			edges.emplace_back(v_index, index, dist_penalty*motion_similarity);
+			//edges.emplace_back(v_index, index, motion_similarity);
+		} } 
+		for(size_t t = v_t+1; t < std::min(frame.size()-1, v_t+1 + temporal_window_size/2); ++t) {
 		for(int y = std::max(0, v_y - spatial_window_size/2); y < std::min(video_resolution.height, v_y+1 + spatial_window_size/2); ++y) {
 		for(int x = std::max(0, v_x - spatial_window_size/2); x < std::min(video_resolution.width, v_x+1 + spatial_window_size/2); ++x) {
 		
-			//cv::Vec3i p(x, y, t);
+			cv::Vec3i p(x, y, t);
 			//cv::Vec4f app(gray_frame_mean[t].at<float>(y, x), gray_frame_dev[t].at<float>(y, x), app_change[t].at<cv::Vec2f>(y, x)[0], app_change[t].at<cv::Vec2f>(y, x)[1]);
 
 			float motion_similarity = l2_similarity(v_flow, flow[t].at<cv::Vec2f>(y,x))/motion_similarity_scale;
+			float dist_penalty = cv::norm(v_p - p, cv::NORM_L2); // TODO Normalization
 			//float motion_similarity = cosine_similarity(v_flow, flow[t].at<cv::Vec2f>(y,x))/motion_similarity_scale;
-			//float dist_penalty = cv::norm(v_p - p, cv::NORM_L2); // TODO Normalization
 			//float appearence_similarity = l2_similarity(v_app, app)/ appearence_similarity_scale;
 
 			int index = x + y*video_resolution.width + (t-1)*video_resolution.area(); // skip first frame
-			edges.emplace_back(v_index, index, motion_similarity);
-			//edges.emplace_back(v_index, index, dist_penalty*motion_similarity);
-			//
-			//edges.emplace_back(v_index, index, appearence_similarity);
-			//edges.emplace_back(v_index, index, l2_similarity(cv::Vec3f(dist_similarity, motion_similarity, appearence_similarity)));
-			//edges.emplace_back(v_index, index, l2_similarity(cv::Vec3f(dist_similarity, motion_similarity)));
-			//edges.emplace_back(v_index, index, l2_similarity(cv::Vec3f(appearence_similarity, motion_similarity)));
+			edges.emplace_back(v_index, index, dist_penalty*motion_similarity);
+			//edges.emplace_back(v_index, index, motion_similarity);
 		} } }
 	} } }
 	if(verbose) {
