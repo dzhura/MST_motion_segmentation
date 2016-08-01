@@ -12,6 +12,11 @@
 
 #include <libgen.h> // dirname
 
+#include <errno.h>	
+
+#include <sys/stat.h> // mkdir
+#include <sys/types.h>
+
 #include <opencv2/core/core.hpp>
 #include <opencv2/gpu/gpu.hpp>
 #include <opencv2/highgui/highgui.hpp>
@@ -113,8 +118,12 @@ int main(int argc, char * argv[])
 	assert( 1 <= temporal_window_size && temporal_window_size <= flows.size() && temporal_window_size%2 == 1 );
 
 	std::string base_output_filename(argv[5]);
+	if(mkdir(base_output_filename.c_str(), 0755) == -1) {
+		std::cout << "Failed to create " << base_output_filename << " directory: " << strerror(errno) << std::endl;
+		return -1;
+	}
 
-	//// Build an spatio-temporal graph
+	//// Build a spatio-temporal graph
 	std::list< int > vertices;
 	for(size_t t=0; t<flows.size(); ++t) {
 	for(int y=0; y<flow_size.height; ++y) {
@@ -135,22 +144,26 @@ int main(int argc, char * argv[])
 		int u_t = *p_u / (flow_size.width*flow_size.height);
 
 		for( int y = u_y+1; y <= cv::min(flow_size.height-1, u_y+spatial_window_size/2); ++y) {
-
 			int v_index = u_x + y*flow_size.width + u_t*flow_size.width*flow_size.height;
-			edges.emplace_back(*p_u, v_index, l2_similarity(flows[u_t].at<cv::Vec2f>(u_y, u_x), flows[u_t].at<cv::Vec2f>(y, u_x)));
+			double motion_similarity = l2_similarity(flows[u_t].at<cv::Vec2f>(u_y, u_x), flows[u_t].at<cv::Vec2f>(y, u_x));
+			double geometric_similarity = l2_similarity(cv::Vec2f(u_y, u_x), cv::Vec2f(y, u_x));
+			edges.emplace_back(*p_u, v_index, motion_similarity*geometric_similarity);
 		}
 
 		for( int x = u_x+1; x <= cv::min(flow_size.width-1, u_x+spatial_window_size/2); ++x) {
-
 			int v_index = x + u_y*flow_size.width + u_t*flow_size.width*flow_size.height;
-			edges.emplace_back(*p_u, v_index, l2_similarity(flows[u_t].at<cv::Vec2f>(u_y, u_x), flows[u_t].at<cv::Vec2f>(u_y, x)));
+			double motion_similarity = l2_similarity(flows[u_t].at<cv::Vec2f>(u_y, u_x), flows[u_t].at<cv::Vec2f>(u_y, x));
+			double geometric_similarity = l2_similarity(cv::Vec2f(u_y, u_x), cv::Vec2f(u_y, x));
+			edges.emplace_back(*p_u, v_index, motion_similarity*geometric_similarity);
 		}
 
 		for( int y = u_y+1; y <= cv::min(flow_size.height-1, u_y+spatial_window_size/2); ++y) {
 		for( int x = u_x+1; x <= cv::min(flow_size.width-1, u_x+spatial_window_size/2); ++x) {
 
 			int v_index = x + y*flow_size.width + u_t*flow_size.width*flow_size.height;
-			edges.emplace_back(*p_u, v_index, l2_similarity(flows[u_t].at<cv::Vec2f>(u_y, u_x), flows[u_t].at<cv::Vec2f>(y, x)));
+			double motion_similarity = l2_similarity(flows[u_t].at<cv::Vec2f>(u_y, u_x), flows[u_t].at<cv::Vec2f>(y, x));
+			double geometric_similarity = l2_similarity(cv::Vec2f(u_y, u_x), cv::Vec2f(y, x));
+			edges.emplace_back(*p_u, v_index, motion_similarity*geometric_similarity);
 		} }
 
 		cv::Vec2f flow_vec = flows[u_t].at<cv::Vec2f>(u_y, u_x);
@@ -168,7 +181,9 @@ int main(int argc, char * argv[])
 			}
 
 			int v_index = rounded_x + rounded_y*flow_size.width + t*flow_size.width*flow_size.height;
-			edges.emplace_back(*p_u, v_index, l2_similarity(flows[u_t].at<cv::Vec2f>(u_y, u_x), flows[t].at<cv::Vec2f>(rounded_y, rounded_x)));
+			double motion_similarity = l2_similarity(flows[u_t].at<cv::Vec2f>(u_y, u_x), flows[u_t].at<cv::Vec2f>(rounded_y, rounded_x));
+			double geometric_similarity = l2_similarity(cv::Vec2f(u_y, u_x), cv::Vec2f(rounded_y, rounded_x));
+			edges.emplace_back(*p_u, v_index, motion_similarity*geometric_similarity);
 
 			flow_vec = flows[t].at<cv::Vec2f>(rounded_y, rounded_x);
 			x += flow_vec[0];
@@ -258,7 +273,8 @@ int main(int argc, char * argv[])
 	}
 
 	for(size_t i=0; i < output.size(); ++i) {
-		std::string output_filename = base_output_filename + '_' + std::to_string(i) + ".png";
+		size_t optical_flow_number = 1 + amount_of_optical_flows_to_skip + i;
+		std::string output_filename = base_output_filename + '/' + std::to_string(optical_flow_number) + ".png";
 		cv::imwrite(output_filename, output[i]);
 	}
 
