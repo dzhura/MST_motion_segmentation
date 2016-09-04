@@ -2,7 +2,6 @@
 #include <cmath> // abs pow sqrt M_PI
 #include <list>
 #include <vector>
-//#include <algorithm> // for_each
 #include <utility> // pair
 #include <fstream> // C++ style file reading
 #include <stdio.h> // C-style file reading
@@ -20,8 +19,6 @@
 #include <opencv2/core/core.hpp>
 #include <opencv2/gpu/gpu.hpp>
 #include <opencv2/highgui/highgui.hpp>
-
-//#include <opencv2/imgproc/imgproc.hpp> // split
 
 #include <boost/property_map/vector_property_map.hpp>
 #include <boost/pending/disjoint_sets.hpp>
@@ -72,20 +69,20 @@ int main(int argc, char * argv[])
 	int amount_of_frames,  amount_of_frames_for_seg, amount_of_frames_to_skip;
 	infile >> amount_of_frames >> amount_of_frames_for_seg >> amount_of_frames_to_skip;
 
-	if(0 > amount_of_frames) {
-		std::cout << "Negative amount of frames";
+	if( amount_of_frames < 1 ) {
+		std::cout << "Non-positive amount of frames" << std::endl;
 		return 1;
 	}
-	if(0 > amount_of_frames_to_skip) {
-		std::cout << "Negative amount of frames to be skipped";
+	if( amount_of_frames_to_skip < 0) {
+		std::cout << "Negative amount of frames to be skipped" << std::endl;
 		return 1;
 	}
-	if(0 > amount_of_frames_for_seg) {
-		std::cout << "Negative amount of frames to be segmented";
+	if( amount_of_frames_for_seg < 1) {
+		std::cout << "Non-negative amount of frames to be segmented" << std::endl;
 		return 1;
 	}
-	if(amount_of_frames-1 <= amount_of_frames_to_skip + amount_of_frames_for_seg) {
-		std::cout << "Too many frames to be segmented and/or skipped";
+	if( amount_of_frames_to_skip + amount_of_frames_for_seg > amount_of_frames ) {
+		std::cout << "Too many frames to be segmented and/or skipped" << std::endl;
 		return 1;
 	}
 
