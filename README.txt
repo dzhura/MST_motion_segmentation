@@ -1,11 +1,13 @@
-Given n frames. Segment frames according to optical flow
+Given a number of frames N. Segment M frames based on forward and backward optical flows starting from frame S
+Output: frames S to M+S < N will be segmented
 File format:
-Total_amount_of_frames amount_of_frames_to_segemnt amount_of_frames_to_skip
-frame_1
-frame_2
+N M S
+forward optical_flow_1
+forward optical_flow_2
+forward optical_flow_3
 ...
-frame_n
-optical_flow_2
-optical_flow_3
+forward optical_flow_N-1
+backward optical_flow_2
+backward optical_flow_3
 ...
-optical_flow_n
+backward optical_flow_N

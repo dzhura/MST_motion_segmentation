@@ -44,26 +44,21 @@ struct edge_t
 	}
 };
 
-// Returns nan is lo or ro are zero vectros
-// TODO Use homogeneous coordinates to prevent divizion by zero
-float cosine_similarity(const cv::Vec2f & lo, const cv::Vec2f & ro);
-
-float l2_similarity(const cv::Vec2f & lo, const cv::Vec2f & ro);
+cv::Vec2f approx_flow_vector(double x, double y, const cv::Mat & opt_flow);
 
 void randomPermuteRange(int n, std::vector<int>& vec, unsigned int *seed);
+
 cv::Vec3b colour_8UC3(int index);
 
 bool read_opticalFlow(const std::string & opticalflow_filename, cv::Mat & out);
 
 int main(int argc, char * argv[])
 {
-	if( argc != 5 + 1) {
+	if( argc != 3 + 1) {
 		std::cout << argv[0] <<" usage:" << std::endl;
-		std::cout << "1\tPath to list of optical flows. First row: <amount of optical flows> <optical flows to skip> <optical flows for segmetation>. Second row: <path to optical flow>, third row: <path to optical flow>, etc" << std::endl;
+		std::cout << "1\tPath to list of optical flows" << std::endl;
 		std::cout << "2\t(0,inf)\t\tthi additional threshold; larger thi results in larger segments" << std::endl;
-		std::cout << "3\t2*n+1, n=1,2,3...\tsize of spatial window, where all elements are linked with the central" << std::endl;
-		std::cout << "4\t2*n+1, n=1,2,3...\tsize of temporal window, where all elements are linked with the central" << std::endl;
-		std::cout << "5\tbase name of output file" << std::endl;
+		std::cout << "3\tname of output folder" << std::endl;
 		return 1;
 	}
 
@@ -73,121 +68,167 @@ int main(int argc, char * argv[])
 		std::cout << "Could not open " << argv[1] << std::endl;
 		return 1;
 	}
+
+	int amount_of_frames,  amount_of_frames_for_seg, amount_of_frames_to_skip;
+	infile >> amount_of_frames >> amount_of_frames_for_seg >> amount_of_frames_to_skip;
+
+	if(0 > amount_of_frames) {
+		std::cout << "Negative amount of frames";
+		return 1;
+	}
+	if(0 > amount_of_frames_to_skip) {
+		std::cout << "Negative amount of frames to be skipped";
+		return 1;
+	}
+	if(0 > amount_of_frames_for_seg) {
+		std::cout << "Negative amount of frames to be segmented";
+		return 1;
+	}
+	if(amount_of_frames-1 <= amount_of_frames_to_skip + amount_of_frames_for_seg) {
+		std::cout << "Too many frames to be segmented and/or skipped";
+		return 1;
+	}
+
 	std::string dname( dirname(argv[1]) );
 
-	int amount_of_optical_flows=0,  amount_of_optical_flows_to_skip=0, amount_of_optical_flows_for_seg=0;
-	infile >> amount_of_optical_flows >> amount_of_optical_flows_to_skip >> amount_of_optical_flows_for_seg;
-
-	assert(0 < amount_of_optical_flows);
-	assert(-1 < amount_of_optical_flows_to_skip);
-	assert(0 < amount_of_optical_flows_for_seg);
-	assert(amount_of_optical_flows_to_skip + amount_of_optical_flows_for_seg <= amount_of_optical_flows);
-
-	// Skip
-	for(int i=0; i<amount_of_optical_flows_to_skip; ++i) {
+	// Skip forward optical flows
+	for(int i=0; i<amount_of_frames_to_skip; ++i) {
 		std::string dummy;
 		infile >> dummy;
 	}
 
-	std::vector<cv::Mat> flows(amount_of_optical_flows_for_seg);
-	for(size_t i=0; i<flows.size(); ++i) {
+	// Read forward optical flows
+	std::vector<cv::Mat> forward_flows(amount_of_frames_for_seg);
+	for(size_t i=0; i<forward_flows.size(); ++i) {
 		std::string opt_flow_basename;
 		infile >> opt_flow_basename;
 		std::string opt_flow_name = dname + '/' + opt_flow_basename;
 
-		if( !read_opticalFlow(opt_flow_name, flows[i])) {
+		if( !read_opticalFlow(opt_flow_name, forward_flows[i])) {
 			std::cout << "Could not read optical flow: " << opt_flow_name << std::endl;
 			return 1;
 		}
-		if(flows[i].size() != flows[0].size()) {
+		if(forward_flows[i].size() != forward_flows[0].size()) {
 			std::cout << "Size of optical flow " << opt_flow_name << " is different from size of the first optical flow" << std::endl;
 			return 1;
 		}
 	}
+
+	// Skips the rest of forward optical flows
+	for(int i=amount_of_frames_to_skip + amount_of_frames_for_seg; i<amount_of_frames-1; ++i) {
+		std::string dummy;
+		infile >> dummy;
+	}
+	
+	// Skip backward optical flows
+	for(int i=0; i<amount_of_frames_to_skip; ++i) {
+		std::string dummy;
+		infile >> dummy;
+	}
+
+	// Read backward optical flows
+	std::vector<cv::Mat> backward_flows(amount_of_frames_for_seg+1); // backward flows are shifted towards: 0 element is empty
+	for(size_t i=1; i<backward_flows.size(); ++i) {
+		std::string opt_flow_basename;
+		infile >> opt_flow_basename;
+		std::string opt_flow_name = dname + '/' + opt_flow_basename;
+
+		if( !read_opticalFlow(opt_flow_name, backward_flows[i])) {
+			std::cout << "Could not read optical flow: " << opt_flow_name << std::endl;
+			return 1;
+		}
+		if(backward_flows[i].size() != forward_flows[0].size()) {
+			std::cout << "Size of optical flow " << opt_flow_name << " is different from size of the first optical flow" << std::endl;
+			return 1;
+		}
+	}
+
+	// Finish
 	infile.close();
 
-	cv::Size flow_size = flows[0].size();
-
 	double thi = atof(argv[2]);
-	assert( 0 < thi );
+	assert( 0 <= thi );
 
-	int spatial_window_size = atoi(argv[3]);
-	assert( 3 <= spatial_window_size && spatial_window_size < cv::min(flows[0].cols, flows[0].rows) && spatial_window_size%2 == 1 );
-
-	size_t temporal_window_size = atoi(argv[4]);
-	assert( 1 <= temporal_window_size && temporal_window_size <= flows.size() && temporal_window_size%2 == 1 );
-
-	std::string base_output_filename(argv[5]);
+	std::string base_output_filename(argv[3]);
 	if(mkdir(base_output_filename.c_str(), 0755) == -1) {
 		std::cout << "Failed to create " << base_output_filename << " directory: " << strerror(errno) << std::endl;
 		return -1;
 	}
 
-	//// Build a spatio-temporal graph
-	std::list< int > vertices;
-	for(size_t t=0; t<flows.size(); ++t) {
-	for(int y=0; y<flow_size.height; ++y) {
-	for(int x=0; x<flow_size.width; ++x) {
+	std::cout << "Amount of frames to be segmented: " << amount_of_frames_for_seg << std::endl;
 
-		int u_index = x + y*flow_size.width + t*flow_size.width*flow_size.height;
-		vertices.push_back(u_index);
-	} } }
+	cv::Size flow_size = forward_flows[0].size();
+	std::cout << "Frame size: " << flow_size << std::endl; // Flow size is equal to frame size
+
+	//// Build a spatio-temporal graph
+	// Vertices
+	std::list< int > vertices_indexes;
+	for(int t=0; t<amount_of_frames_for_seg; ++t) {
+		for(int y=0; y<flow_size.height; ++y) {
+			for(int x=0; x<flow_size.width; ++x) {
+				vertices_indexes.push_back(x + y*flow_size.width + t*flow_size.width*flow_size.height);
+			}
+		}
+       	}
 	if(verbose) {
-		std::cout << "Amount of vertices:\t" << vertices.size() << std::endl;
+		std::cout << "Amount of vertices:\t" << vertices_indexes.size() << std::endl;
 	}
 
+	// Edges
 	std::list< edge_t > edges;
-	for(auto p_u=vertices.begin(); p_u != vertices.end(); ++p_u) {
-		
-		int u_x = *p_u % flow_size.width;
-		int u_y = ((*p_u - u_x)/flow_size.width) % flow_size.height;
-		int u_t = *p_u / (flow_size.width*flow_size.height);
+	for(auto v_index=vertices_indexes.begin(); v_index != vertices_indexes.end(); ++v_index) {
+		size_t frame_num = *v_index / (flow_size.width*flow_size.height);
+		cv::Point v_cord;
+		v_cord.x = *v_index % flow_size.width;
+		v_cord.y = ((*v_index - v_cord.x)/flow_size.width) % flow_size.height;
 
-		for( int y = u_y+1; y <= cv::min(flow_size.height-1, u_y+spatial_window_size/2); ++y) {
-			int v_index = u_x + y*flow_size.width + u_t*flow_size.width*flow_size.height;
-			double motion_similarity = l2_similarity(flows[u_t].at<cv::Vec2f>(u_y, u_x), flows[u_t].at<cv::Vec2f>(y, u_x));
-			double geometric_similarity = l2_similarity(cv::Vec2f(u_y, u_x), cv::Vec2f(y, u_x));
-			edges.emplace_back(*p_u, v_index, motion_similarity*geometric_similarity);
+		cv::Vec2f v_fflow_vec = forward_flows[frame_num].at<cv::Vec2f>(v_cord);
+
+		// Build edges between four closest neightbours: top, left, right and bottom
+		// More neightbours are redundant
+		// Current vertex is already linked with left and top neigthbours
+		std::list<cv::Point> neightbours_cord;
+		if(v_cord.x+1 < flow_size.width) {
+			neightbours_cord.emplace_back(v_cord.x+1, v_cord.y); // Neightbour on the right
+		}
+		if(v_cord.y+1 < flow_size.height) {
+			neightbours_cord.emplace_back(v_cord.x, v_cord.y+1); // neightbour on the bottom
 		}
 
-		for( int x = u_x+1; x <= cv::min(flow_size.width-1, u_x+spatial_window_size/2); ++x) {
-			int v_index = x + u_y*flow_size.width + u_t*flow_size.width*flow_size.height;
-			double motion_similarity = l2_similarity(flows[u_t].at<cv::Vec2f>(u_y, u_x), flows[u_t].at<cv::Vec2f>(u_y, x));
-			double geometric_similarity = l2_similarity(cv::Vec2f(u_y, u_x), cv::Vec2f(u_y, x));
-			edges.emplace_back(*p_u, v_index, motion_similarity*geometric_similarity);
+		// Compute similarity
+		for(auto n = neightbours_cord.begin(); n != neightbours_cord.end(); ++n) {
+			int neightbour_index = n->x + n->y*flow_size.width + frame_num*flow_size.width*flow_size.height;
+
+			double motion_similarity = cv::norm(forward_flows[frame_num].at<cv::Vec2f>(*n) - v_fflow_vec, cv::NORM_L2); // TODO normalization from Brox ECCV`10
+			double geometric_similarity = sqrt(pow(n->x - v_cord.x,2) + pow(n->y - v_cord.y,2));
+			// TODO double flow_error = ...
+
+			edges.emplace_back(*v_index, neightbour_index, geometric_similarity*motion_similarity);
 		}
 
-		for( int y = u_y+1; y <= cv::min(flow_size.height-1, u_y+spatial_window_size/2); ++y) {
-		for( int x = u_x+1; x <= cv::min(flow_size.width-1, u_x+spatial_window_size/2); ++x) {
+		// Track this vertext to the next frame and give similarity equal to error of flow estimation
+		// TODO Get backward optical flow
+		cv::Point tracked_v_cord;
+		tracked_v_cord.x = v_cord.x + cvRound(v_fflow_vec[0]);
+		tracked_v_cord.y = v_cord.y + cvRound(v_fflow_vec[1]);
 
-			int v_index = x + y*flow_size.width + u_t*flow_size.width*flow_size.height;
-			double motion_similarity = l2_similarity(flows[u_t].at<cv::Vec2f>(u_y, u_x), flows[u_t].at<cv::Vec2f>(y, x));
-			double geometric_similarity = l2_similarity(cv::Vec2f(u_y, u_x), cv::Vec2f(y, x));
-			edges.emplace_back(*p_u, v_index, motion_similarity*geometric_similarity);
-		} }
+		if( tracked_v_cord.x < 0 || flow_size.width <= tracked_v_cord.x ||
+			tracked_v_cord.y < 0 || flow_size.height <= tracked_v_cord.y ||
+			frame_num == forward_flows.size()-1 ) {
+			continue; // Tracked vertex is outside of the video sequence
+		}
+		else {
+			// Note: we are in the next frame
+			int tracked_v_index = tracked_v_cord.x + tracked_v_cord.y*flow_size.width + (frame_num+1)*flow_size.width*flow_size.height;
 
-		cv::Vec2f flow_vec = flows[u_t].at<cv::Vec2f>(u_y, u_x);
-		float x = u_x + flow_vec[0];
-		float y = u_y + flow_vec[1];
-		for( size_t t = u_t+1; t <= cv::min(flows.size()-1, u_t+temporal_window_size/2); ++t) {
-
-			int rounded_x = cvRound(x);
-			if( rounded_x < 0 || flow_size.width <= rounded_x) {
+			//double motion_similarity = cv::norm(forward_flows[frame_num+1].at<cv::Vec2f>(tracked_v_cord) - v_fflow_vec, cv::NORM_L2);
+			cv::Vec2f aprox_bflow = approx_flow_vector(v_cord.x + v_fflow_vec[0], v_cord.y + v_fflow_vec[1], backward_flows[frame_num+1]);
+			if(isnan(aprox_bflow[0]) || isnan(aprox_bflow[1])) {
 				continue;
 			}
-			int rounded_y = cvRound(y);
-			if( rounded_y < 0 || flow_size.height <= rounded_y) {
-				continue;
-			}
+			double flow_error = cv::norm(v_fflow_vec + aprox_bflow);
 
-			int v_index = rounded_x + rounded_y*flow_size.width + t*flow_size.width*flow_size.height;
-			double motion_similarity = l2_similarity(flows[u_t].at<cv::Vec2f>(u_y, u_x), flows[u_t].at<cv::Vec2f>(rounded_y, rounded_x));
-			double geometric_similarity = l2_similarity(cv::Vec2f(u_y, u_x), cv::Vec2f(rounded_y, rounded_x));
-			edges.emplace_back(*p_u, v_index, motion_similarity*geometric_similarity);
-
-			flow_vec = flows[t].at<cv::Vec2f>(rounded_y, rounded_x);
-			x += flow_vec[0];
-			y += flow_vec[1];
+			edges.emplace_back(*v_index, tracked_v_index, flow_error);
 		}
 	}
 	if(verbose) {
@@ -201,16 +242,16 @@ int main(int argc, char * argv[])
 	typedef boost::vector_property_map<std::size_t> rank_t;
 	typedef boost::vector_property_map<int> parent_t;
 
-	rank_t rank_map(vertices.size());
-	parent_t parent_map(vertices.size());
+	rank_t rank_map(vertices_indexes.size());
+	parent_t parent_map(vertices_indexes.size());
 
 	boost::disjoint_sets<rank_t, parent_t > dsets(rank_map, parent_map);
-	for(auto vertex=vertices.begin(); vertex != vertices.end(); ++vertex) {
+	for(auto vertex=vertices_indexes.begin(); vertex != vertices_indexes.end(); ++vertex) {
 		dsets.make_set(*vertex);
 	}
 
-	std::vector<double> mst_max_weight(vertices.size(), 0);
-	std::vector<double> mst_size(vertices.size(), 1);
+	std::vector<double> mst_max_weight(vertices_indexes.size(), 0);
+	std::vector<double> mst_size(vertices_indexes.size(), 1);
 
 	edges.sort();
 
@@ -226,13 +267,13 @@ int main(int argc, char * argv[])
 			dsets.link(parent_u, parent_v); // Equivalent to union(u, v)
 
 			int parent = dsets.find_set(parent_u);
-			mst_max_weight[parent] = edge->_weight; // Edges are sorted
+			mst_max_weight[parent] = edge->_weight; // Since edges are sorted in ascend order
 			mst_size[parent] = mst_size[parent_u] + mst_size[parent_v];
 		}	
 	}
-	dsets.compress_sets(vertices.begin(), vertices.end());
+	dsets.compress_sets(vertices_indexes.begin(), vertices_indexes.end());
 
-	int amount_of_segments = dsets.count_sets(vertices.begin(), vertices.end());
+	int amount_of_segments = dsets.count_sets(vertices_indexes.begin(), vertices_indexes.end());
 	if(verbose) {
 		std::cout << "Amount of segments:\t" << amount_of_segments << std::endl;
 	}
@@ -240,7 +281,7 @@ int main(int argc, char * argv[])
 	//// 
 	std::unordered_map<int, int> segment2colour_index(amount_of_segments);
 	int colour_index = 0;
-	for( auto v = vertices.begin(); v != vertices.end(); ++v) {
+	for( auto v = vertices_indexes.begin(); v != vertices_indexes.end(); ++v) {
 		int segment_rep = dsets.find_set(*v);
 		auto iter = segment2colour_index.find(segment_rep);
 		if(iter == segment2colour_index.end()) {
@@ -251,18 +292,25 @@ int main(int argc, char * argv[])
 
 
 	//// Generating colour codes
+	if(amount_of_segments >= pow(256,3)) {
+		if(verbose) {
+			std::cout << "Too many segments!" << std::endl;
+			std::cout << "return 1;" << std::endl;
+		}
+		return 1;
+	}
 	std::vector<int> random_numbers;
 	unsigned int seed = rand() % 1000000;
-	randomPermuteRange(pow(256,3), random_numbers, &seed); 
+	randomPermuteRange(/*amount of numbers*/pow(256,3), random_numbers, &seed); 
 
 	//// Output
-	std::vector<cv::Mat> output(flows.size());
+	std::vector<cv::Mat> output(forward_flows.size());
 	for(size_t i=0; i<output.size(); ++i) {
 		cv::Mat temp = cv::Mat::zeros(flow_size, CV_8UC3);
 		temp.copyTo(output[i]);
 	}
 
-	for(auto p_v = vertices.begin(); p_v != vertices.end(); ++p_v) {
+	for(auto p_v = vertices_indexes.begin(); p_v != vertices_indexes.end(); ++p_v) {
 	
 		int x = *p_v % flow_size.width;
 		int y = ((*p_v - x)/flow_size.width) % flow_size.height;
@@ -273,7 +321,7 @@ int main(int argc, char * argv[])
 	}
 
 	for(size_t i=0; i < output.size(); ++i) {
-		size_t optical_flow_number = 1 + amount_of_optical_flows_to_skip + i;
+		size_t optical_flow_number = 1 + amount_of_frames_to_skip + i;
 		std::string output_filename = base_output_filename + '/' + std::to_string(optical_flow_number) + ".png";
 		cv::imwrite(output_filename, output[i]);
 	}
@@ -281,18 +329,35 @@ int main(int argc, char * argv[])
 	return 0;
 }
 
-float cosine_similarity(const cv::Vec2f & lo, const cv::Vec2f & ro)
+cv::Vec2f approx_flow_vector(double x, double y, const cv::Mat & opt_flow)
 {
-	float similarity  = (lo[0]*ro[0] + lo[1]*ro[1]) / (cv::norm(lo) * cv::norm(ro));
-
-	if(isnan(similarity)) {
-		return similarity;
+	if( x < 0 || opt_flow.size().width-1 <= x ||
+		y < 0 || opt_flow.size().height-1 <= y ) {
+		return cv::Vec2f(nan(""), nan(""));
 	}
-	return (similarity > 0)? 1 - similarity : 1;
-}
-float l2_similarity(const cv::Vec2f & lo, const cv::Vec2f & ro)
-{
-	return cv::norm(lo - ro, cv::NORM_L2);
+
+	int l_x = floor(x); // left
+	int r_x = l_x + 1; // right
+	int b_y = floor(y); // bottom
+	int u_y = b_y + 1; // upper
+
+	double dx = x - l_x;
+	double dy = y - b_y;
+
+	cv::Vec2f ul_flow = opt_flow.at<cv::Vec2f>(u_y, l_x);
+	cv::Vec2f ur_flow = opt_flow.at<cv::Vec2f>(u_y, r_x);
+	cv::Vec2f bl_flow = opt_flow.at<cv::Vec2f>(b_y, l_x);
+	cv::Vec2f br_flow = opt_flow.at<cv::Vec2f>(b_y, r_x);
+	
+	double a = (1.0 - dx)*ul_flow[0] + dx*ur_flow[0];
+	double b = (1.0 - dx)*bl_flow[0] + dx*br_flow[0];
+	double u = (1.0 - dy)*b + dy*a;
+
+	a = (1.0 - dy)*bl_flow[1] + dy*ul_flow[1];
+	b = (1.0 - dy)*br_flow[1] + dy*ur_flow[1];
+	double v = (1.0 - dx)*a + dx*b;
+
+	return cv::Vec2f(u, v);
 }
 
 void randomPermuteRange(int n, std::vector<int>& vec, unsigned int *seed)
