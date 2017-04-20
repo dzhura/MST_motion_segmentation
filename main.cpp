@@ -235,7 +235,8 @@ int main(int argc, char * argv[])
 	typedef boost::vector_property_map<std::size_t> rank_t;
 	typedef boost::vector_property_map< int> parent_t;
 
-	std::size_t vertices_count = flow_size.area();
+	std::size_t vertices_count = vertices.size();
+
 	rank_t rank_map(vertices_count);
 	parent_t parent_map(vertices_count);
 
