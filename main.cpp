@@ -37,10 +37,7 @@ struct edge_t
 
 float dist_similarity_scale = 1;
 float motion_similarity_scale = 1;
-float motion_eps = 1;
-int neighbourhood_size = 2;
-double thi = 5;
-int window_size = 3;
+int window_size = 1;
 
 double scalar(const double rx, const double ry, const double lx, const double ly);
 
@@ -56,8 +53,8 @@ int main(int argc, char * argv[])
 {
  
 	// TODO Load optical flow file (.flo) instead of computing one
-	if( argc != 1 + 1) {
-		std::cerr << argv[0] <<" usage: <.flo file>" << std::endl;
+	if( argc != 2 + 1) {
+		std::cerr << argv[0] <<" usage: <.flo file> <thi>" << std::endl;
 		std::cerr << "result is returned to standard output" << std::endl;
 		return 2;
 	}
@@ -68,6 +65,9 @@ int main(int argc, char * argv[])
 		std::cerr << "Could not read opticalflow: " << argv[2] << std::endl;
 		return 1;
 	}
+
+	double thi = atof(argv[2]);
+
 
 	//// Preprocessing
 
