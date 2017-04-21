@@ -84,21 +84,26 @@ int main(int argc, char * argv[])
 
 			vertices.push_back(v_x + v_y*flow_size.width);
 
-			cv::Vec2f v_flow = *(v_x + flow.ptr<cv::Vec2f>(v_y));
-			for(int y = std::max(0, v_y - window_size/2); y < std::min(flow_size.height, v_y+1 + window_size/2); ++y) {
-				const cv::Vec2f * p_flow = flow.ptr<cv::Vec2f>(y);
-				for(int x = std::max(0, v_x - window_size/2); x < std::min(flow_size.width, v_x+1 + window_size/2); ++x) {
-				
-					float motion_similarity = cv::norm(v_flow - *(p_flow + x), norm_type)/motion_similarity_scale;
-					//float dist_similarity = cv::norm(v_p - p, norm_type)/(window_size*dist_similarity_scale*sqrt(2)/2); // Normalized; in [0;1] range
-
-					edges.emplace_back(v_x + v_y*flow_size.width, x + y*flow_size.width, motion_similarity);
-					//edges.emplace_back(v_x + v_y*flow_size.width, x + y*flow_size.width, cv::norm(cv::Vec3f(dist_similarity, motion_similarity), norm_type));
+			cv::Vec2f v_flow = flow.at<cv::Vec2f>(v_y, v_x);
+			for(int dy = 1; dy < std::max(2, 1+window_size/2) && (v_y + dy < flow_size.height); ++dy) {
+				int dx = 0;
+				float motion_similarity = cv::norm(v_flow - flow.at<cv::Vec2f>(v_y+dy, v_x+dx), norm_type)/motion_similarity_scale;
+				edges.emplace_back(v_x + v_y*flow_size.width, v_x+dx + (v_y+dy)*flow_size.width, motion_similarity);
+			}
+			for(int dx = 1; dx < std::max(2, 1+window_size/2) && (v_x + dx < flow_size.width); ++dx) {
+				int dy = 0;
+				float motion_similarity = cv::norm(v_flow - flow.at<cv::Vec2f>(v_y+dy, v_x+dx), norm_type)/motion_similarity_scale;
+				edges.emplace_back(v_x + v_y*flow_size.width, v_x+dx + (v_y+dy)*flow_size.width, motion_similarity);
+			}
+			for(int dy = 1; dy < std::max(2, 1+window_size/2) && (v_y + dy < flow_size.height); ++dy) {
+				for(int dx = 1; dx < std::max(2, 1+window_size/2) && (v_x + dx < flow_size.width); ++dx) {
+					float motion_similarity = cv::norm(v_flow - flow.at<cv::Vec2f>(v_y+dy, v_x+dx), norm_type)/motion_similarity_scale;
+					edges.emplace_back(v_x + v_y*flow_size.width, v_x+dx + (v_y+dy)*flow_size.width, motion_similarity);
 				}
 			}
 		}
 	}
-
+	
 	//// Segmentation
 	// Create initial disjoint sets, each containg a singel vertex
 	typedef boost::vector_property_map<std::size_t> rank_t;
