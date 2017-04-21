@@ -47,6 +47,9 @@ double scalar(const double rx, const double ry, const double lx, const double ly
 double similarity(const float beta, float scale_factor, float eps=0);
 double similarity(const int beta, float scale_factor, float eps=0);
 
+void randomPermuteRange(int n, std::vector<int>& vec, unsigned int *seed);
+cv::Vec3b colour_8UC3(int index);
+
 bool read_opticalFlow(const std::string & opticalflow_filename, cv::Mat & out);
 
 int main(int argc, char * argv[])
@@ -164,7 +167,25 @@ int main(int argc, char * argv[])
 		std::cout << avrg_flow[0] << ' ' << avrg_flow[1] << ' ';
 	}
 	std::cout << std::endl;
-	
+
+        //// Return output
+	// For the component colouring
+	std::vector<int> random_numbers;
+	unsigned int seed = rand() % 1000000;
+	randomPermuteRange(pow(256,3), random_numbers, &seed);
+
+	cv::Mat output(flow_size, CV_8UC3, cv::Scalar_<unsigned char>(0));
+
+        for(auto vertex = vertices.begin(); vertex != vertices.end(); ++vertex) {
+       		int i = *vertex / flow_size.width; 
+		int j = *vertex % flow_size.width; 
+
+		output.at<cv::Vec3b>(i,j) = colour_8UC3( random_numbers[dsets.find_set(*vertex)] ); 
+	} 
+
+	std::string output_filename = "out_flow-thi" + std::to_string(thi) + ".png";
+	cv::imwrite(output_filename.c_str(), output);
+
 	return 0;
 }
 
@@ -181,6 +202,28 @@ double similarity(const float beta, float scale_factor, float eps)
 double similarity(const int beta, float scale_factor, float eps)
 {
 	return 1 - pow(EPS, beta/scale_factor) + eps;
+}
+
+void randomPermuteRange(int n, std::vector<int>& vec, unsigned int *seed)
+{
+        vec.clear();
+       	vec.resize(n);
+
+        vec[0]=0;
+        for(int i=1, j=0; i<n; ++i) {
+                j = rand_r(seed) % (i+1);
+                vec[i] = vec[j];
+                vec[j] = i;
+	}
+}
+
+cv::Vec3b colour_8UC3(int index)
+{
+        unsigned char r = (unsigned char) ((index>>16) % 256);
+	unsigned char g = (unsigned char) ((index>>8) % 256);
+        unsigned char b = (unsigned char) (index % 256);
+
+        return cv::Vec3b(b, g, r);
 }
 
 bool read_opticalFlow(const std::string & opticalflow_filename, cv::Mat & out)
