@@ -1,5 +1,5 @@
 #include <iostream>
-#include <cmath> // abs pow sqrt
+#include <cmath> // abs pow sqrt acos
 #include <list>
 #include <utility> // pair
 #include <vector>
@@ -39,7 +39,10 @@ float dist_similarity_scale = 1;
 float motion_similarity_scale = 1;
 int window_size = 1;
 
-double scalar(const double rx, const double ry, const double lx, const double ly);
+double orthogonal_scalar_product(const cv::Vec2f & a, const cv::Vec2f & b);
+double orthogonal_scalar_product(const double rx, const double ry, const double lx, const double ly);
+
+double orthogonal_cos(const cv::Vec2f & a, const cv::Vec2f & b);
 
 void randomPermuteRange(int n, std::vector<int>& vec, unsigned int *seed);
 cv::Vec3b colour_8UC3(int index);
@@ -85,17 +88,17 @@ int main(int argc, char * argv[])
 			cv::Vec2f v_flow = flow.at<cv::Vec2f>(v_y, v_x);
 			for(int dy = 1; dy < std::max(2, 1+window_size/2) && (v_y + dy < flow_size.height); ++dy) {
 				int dx = 0;
-				float motion_similarity = cv::norm(v_flow - flow.at<cv::Vec2f>(v_y+dy, v_x+dx), norm_type)/motion_similarity_scale;
+				float motion_similarity = acos(orthogonal_cos(v_flow, flow.at<cv::Vec2f>(v_y+dy, v_x+dx)));
 				edges.emplace_back(v_x + v_y*flow_size.width, v_x+dx + (v_y+dy)*flow_size.width, motion_similarity);
 			}
 			for(int dx = 1; dx < std::max(2, 1+window_size/2) && (v_x + dx < flow_size.width); ++dx) {
 				int dy = 0;
-				float motion_similarity = cv::norm(v_flow - flow.at<cv::Vec2f>(v_y+dy, v_x+dx), norm_type)/motion_similarity_scale;
+				float motion_similarity = acos(orthogonal_cos(v_flow, flow.at<cv::Vec2f>(v_y+dy, v_x+dx)));
 				edges.emplace_back(v_x + v_y*flow_size.width, v_x+dx + (v_y+dy)*flow_size.width, motion_similarity);
 			}
 			for(int dy = 1; dy < std::max(2, 1+window_size/2) && (v_y + dy < flow_size.height); ++dy) {
 				for(int dx = 1; dx < std::max(2, 1+window_size/2) && (v_x + dx < flow_size.width); ++dx) {
-					float motion_similarity = cv::norm(v_flow - flow.at<cv::Vec2f>(v_y+dy, v_x+dx), norm_type)/motion_similarity_scale;
+					float motion_similarity = acos(orthogonal_cos(v_flow, flow.at<cv::Vec2f>(v_y+dy, v_x+dx)));
 					edges.emplace_back(v_x + v_y*flow_size.width, v_x+dx + (v_y+dy)*flow_size.width, motion_similarity);
 				}
 			}
@@ -193,9 +196,18 @@ int main(int argc, char * argv[])
 	return 0;
 }
 
-double scalar(const double rx, const double ry, const double lx, const double ly)
+double orthogonal_scalar_product(const cv::Vec2f & a, const cv::Vec2f & b)
+{
+	return a[0]*b[0] + a[1]*b[1];
+}
+double orthogonal_scalar_product(const double rx, const double ry, const double lx, const double ly)
 {
 	return rx*lx + ry*ly;
+}
+
+double orthogonal_cos(const cv::Vec2f & a, const cv::Vec2f & b)
+{
+	return orthogonal_scalar_product(a, b) / (cv::norm(a) * cv::norm(b));
 }
 
 void randomPermuteRange(int n, std::vector<int>& vec, unsigned int *seed)
