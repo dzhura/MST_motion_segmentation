@@ -57,8 +57,9 @@ int main(int argc, char * argv[])
 	}
 
 	//// Input read, check and pre processings
+	std::string in_flow_name(argv[1]);
 	cv::Mat flow;
-	if( !read_opticalFlow(std::string(argv[1]), flow)) {
+	if( !read_opticalFlow(in_flow_name, flow)) {
 		std::cerr << "Could not read opticalflow: " << argv[2] << std::endl;
 		return 1;
 	}
@@ -185,7 +186,8 @@ int main(int argc, char * argv[])
 		output.at<cv::Vec3b>(i,j) = colour_8UC3( random_numbers[dsets.find_set(*vertex)] ); 
 	} 
 
-	std::string output_filename = "out_flow-thi" + std::to_string(thi) + ".png";
+	std::string in_flo_basename = in_flow_name.substr(0, in_flow_name.find(".flo"));
+	std::string output_filename = in_flo_basename + "_thi-" + std::to_string(thi) + ".png";
 	cv::imwrite(output_filename.c_str(), output);
 
 	return 0;
