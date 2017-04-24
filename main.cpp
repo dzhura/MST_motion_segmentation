@@ -41,9 +41,6 @@ int window_size = 1;
 
 double scalar(const double rx, const double ry, const double lx, const double ly);
 
-double similarity(const float beta, float scale_factor, float eps=0);
-double similarity(const int beta, float scale_factor, float eps=0);
-
 void randomPermuteRange(int n, std::vector<int>& vec, unsigned int *seed);
 cv::Vec3b colour_8UC3(int index);
 
@@ -197,16 +194,6 @@ int main(int argc, char * argv[])
 double scalar(const double rx, const double ry, const double lx, const double ly)
 {
 	return rx*lx + ry*ly;
-}
-
-double similarity(const float beta, float scale_factor, float eps)
-{
-	return 1 - pow(EPS, beta/scale_factor) + eps;
-}
-
-double similarity(const int beta, float scale_factor, float eps)
-{
-	return 1 - pow(EPS, beta/scale_factor) + eps;
 }
 
 void randomPermuteRange(int n, std::vector<int>& vec, unsigned int *seed)
