@@ -50,8 +50,9 @@ int main(int argc, char * argv[])
 {
  
 	// TODO Load optical flow file (.flo) instead of computing one
-	if( argc != 2 + 1) {
-		std::cerr << argv[0] <<" usage: <.flo file> <thi>" << std::endl;
+	if( argc != 3 + 1) {
+		std::cerr << argv[0] <<" usage: <.flo file> <thi> <do vizualization>" << std::endl;
+		std::cerr << "<do vizualization>: =1 - yes, otherwise - no" << std::endl;
 		std::cerr << "result is returned to standard output" << std::endl;
 		return 2;
 	}
@@ -66,6 +67,7 @@ int main(int argc, char * argv[])
 
 	double thi = atof(argv[2]);
 
+	bool write_viuzalization = (atoi(argv[3])==1)? true: false;
 
 	//// Preprocessing
 
@@ -173,22 +175,24 @@ int main(int argc, char * argv[])
 
         //// Return output
 	// For the component colouring
-	std::vector<int> random_numbers;
-	unsigned int seed = rand() % 1000000;
-	randomPermuteRange(pow(256,3), random_numbers, &seed);
+	if(write_viuzalization) {
+		std::vector<int> random_numbers;
+		unsigned int seed = rand() % 1000000;
+		randomPermuteRange(pow(256,3), random_numbers, &seed);
 
-	cv::Mat output(flow_size, CV_8UC3, cv::Scalar_<unsigned char>(0));
+		cv::Mat output(flow_size, CV_8UC3, cv::Scalar_<unsigned char>(0));
 
-        for(auto vertex = vertices.begin(); vertex != vertices.end(); ++vertex) {
-       		int i = *vertex / flow_size.width; 
-		int j = *vertex % flow_size.width; 
+		for(auto vertex = vertices.begin(); vertex != vertices.end(); ++vertex) {
+			int i = *vertex / flow_size.width; 
+			int j = *vertex % flow_size.width; 
 
-		output.at<cv::Vec3b>(i,j) = colour_8UC3( random_numbers[dsets.find_set(*vertex)] ); 
-	} 
+			output.at<cv::Vec3b>(i,j) = colour_8UC3( random_numbers[dsets.find_set(*vertex)] ); 
+		} 
 
-	std::string in_flo_basename = in_flow_name.substr(0, in_flow_name.find(".flo"));
-	std::string output_filename = in_flo_basename + "_thi-" + std::to_string(thi) + ".png";
-	cv::imwrite(output_filename.c_str(), output);
+		std::string in_flo_basename = in_flow_name.substr(0, in_flow_name.find(".flo"));
+		std::string output_filename = in_flo_basename + "_thi-" + std::to_string(thi) + ".png";
+		cv::imwrite(output_filename.c_str(), output);
+	}
 
 	return 0;
 }
